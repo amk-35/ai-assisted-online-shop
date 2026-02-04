@@ -6,10 +6,13 @@
 #   - cart: { productId → quantity }
 #   - lastShownProducts: list of products shown in last response
 #   - userProfile: { skinType, concerns }
+#   - conversation_history: last 10 messages
+#   - conversation_summary: summarized older messages
 #
 # All in-memory. Lost on disconnect. Perfect for messenger-style chat.
 # ============================================================
 
+import json
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
@@ -52,6 +55,8 @@ class Session:
         self.last_shown_products: List[ShownProduct] = []
         self.user_profile = UserProfile()
         self.awaiting_checkout = False  # Flag: waiting for customer info
+        self.conversation_history: List[Dict[str, str]] = []  # Stores last 10 messages
+        self.conversation_summary: Optional[str] = None  # Summary of older messages
 
     # ── Cart operations ──────────────────────────────────────
 
@@ -161,6 +166,100 @@ class Session:
                 if concern.lower() not in existing:
                     self.user_profile.concerns.append(concern.lower())
                     existing.add(concern.lower())
+
+    # ── Conversation History ─────────────────────────────────
+
+    def add_to_history(self, role: str, content: str):
+        """
+        Add a message to conversation history.
+        Keeps only last 10 messages. When it exceeds 10, triggers summarization.
+        """
+        self.conversation_history.append({
+            "role": role,
+            "content": content
+        })
+
+        # If we have more than 10 messages, summarize the oldest ones
+        if len(self.conversation_history) > 10:
+            self._summarize_old_messages()
+
+    def _summarize_old_messages(self):
+        """
+        When history exceeds 10 messages, summarize the oldest 5 and keep the recent 5.
+        This prevents token overflow while maintaining context.
+        """
+        # Take the oldest 5 messages to summarize
+        messages_to_summarize = self.conversation_history[:5]
+
+        # Create a text summary (simple version - you can enhance this)
+        summary_parts = []
+        for msg in messages_to_summarize:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            summary_parts.append(f"{role}: {msg['content'][:100]}")  # First 100 chars
+
+        new_summary = "\n".join(summary_parts)
+
+        # Append to existing summary or create new one
+        if self.conversation_summary:
+            self.conversation_summary += f"\n\n[Earlier conversation]\n{new_summary}"
+        else:
+            self.conversation_summary = f"[Earlier conversation]\n{new_summary}"
+
+        # Keep only the recent 5 messages
+        self.conversation_history = self.conversation_history[5:]
+
+    def get_messages_for_api(self, current_user_message: str) -> List[Dict[str, str]]:
+        """
+        Build the messages array for the API call.
+
+        Returns:
+        [
+            {"role": "system", "content": system_prompt_with_context_and_summary},
+            {"role": "user", "content": "..."},
+            {"role": "assistant", "content": "..."},
+            ...
+            {"role": "user", "content": current_user_message}
+        ]
+        """
+        # Build system prompt with context
+        system_prompt = self._build_system_prompt()
+
+        # If we have a summary, prepend it to the system prompt
+        if self.conversation_summary:
+            system_prompt = f"{system_prompt}\n\n━━━ CONVERSATION SUMMARY ━━━\n{self.conversation_summary}\n━━━ END SUMMARY ━━━"
+
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Add conversation history (last 10 messages)
+        messages.extend(self.conversation_history)
+
+        # Add current user message
+        messages.append({"role": "user", "content": current_user_message})
+
+        return messages
+
+    def _build_system_prompt(self) -> str:
+        """
+        Build the system prompt with live session state injected.
+        """
+        from config import SYSTEM_PROMPT_TEMPLATE
+
+        context_dict = self.to_context_dict()
+
+        # Format context nicely for the model to read
+        context_str = f"""
+Last shown products:
+{json.dumps(context_dict['lastShownProducts'], indent=2) if context_dict['lastShownProducts'] else "  (none)"}
+
+User profile:
+  Skin type: {context_dict['userProfile']['skinType'] or '(not set)'}
+  Concerns: {', '.join(context_dict['userProfile']['concerns']) if context_dict['userProfile']['concerns'] else '(none)'}
+
+Current cart:
+{json.dumps(context_dict['cart'], indent=2) if context_dict['cart'] else "  (empty)"}
+"""
+
+        return SYSTEM_PROMPT_TEMPLATE.format(context=context_str.strip())
 
     # ── Serialization for system prompt ──────────────────────
 

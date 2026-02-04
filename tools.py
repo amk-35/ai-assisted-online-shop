@@ -53,19 +53,30 @@ TOOLS = [
         "function": {
             "name": "searchProducts",
             "description": (
-                "Search our store's product catalog. Use this to: "
-                "1) Browse products by category or filter, "
+                "Search our store's product catalog with robust fallback logic. Use this to: "
+                "1) Browse products by free-text query, category, brand, or other filters, "
                 "2) Find recommendations based on skin type or concern, "
                 "3) Surface relevant products alongside knowledge answers. "
+                "Handles compound categories like 'Essence / Serums' — searching 'essence' or 'serums' "
+                "individually will match those products. "
+                "If no results with all filters, automatically falls back to looser criteria. "
                 "Leave any filter you don't have info on as null — the function handles partial filters. "
                 "Call this ALWAYS when answering skincare knowledge questions."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Free-text search across product name, description, and ingredients. e.g. 'vitamin C', 'gel cleanser'"
+                    },
+                    "sku": {
+                        "type": "string",
+                        "description": "Search by product SKU code. e.g. 'SKU-001'"
+                    },
                     "category": {
                         "type": "string",
-                        "description": "Product category. e.g. 'cleanser', 'moisturizer', 'serum', 'toner', 'sunscreen'"
+                        "description": "Product category. e.g. 'cleanser', 'moisturizer', 'serum', 'essence', 'toner', 'sunscreen'. Works with compound categories like 'Essence / Serums'."
                     },
                     "skinType": {
                         "type": "string",
@@ -74,11 +85,28 @@ TOOLS = [
                     },
                     "concern": {
                         "type": "string",
-                        "description": "Filter by concern. e.g. 'acne', 'anti-aging', 'dryness', 'brightening'"
+                        "description": "Filter by concern. e.g. 'acne', 'anti-aging', 'dryness', 'brightening', 'sensitivity'"
+                    },
+                    "brand": {
+                        "type": "string",
+                        "description": "Filter by brand name. e.g. 'The Ordinary', 'CeraVe', 'Cetaphil'"
+                    },
+                    "minPrice": {
+                        "type": "number",
+                        "description": "Minimum price filter"
                     },
                     "maxPrice": {
                         "type": "number",
                         "description": "Maximum price filter if the user mentioned a budget"
+                    },
+                    "stock": {
+                        "type": "boolean",
+                        "description": "Filter by availability. true = in stock only, false = out of stock only. null = all products."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max number of results to return. Default: 6. Max: 20.",
+                        "default": 6
                     }
                 },
                 "required": []
@@ -132,9 +160,10 @@ TOOLS = [
             "name": "addToCart",
             "description": (
                 "Add a product to the user's cart. "
-                "IMPORTANT: Resolve references first. If the user says 'add that one' or 'add the first one', "
+                "Resolve references first. If the user says 'add that one' or 'add the first one', "
                 "look at lastShownProducts in the system prompt context to find the correct productId. "
                 "Only use productIds you can see in the context — never guess."
+                "If you are sure, don't ask back to user."
             ),
             "parameters": {
                 "type": "object",

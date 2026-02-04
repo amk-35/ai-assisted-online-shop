@@ -39,7 +39,7 @@ def getSkincareKnowledge(
     return {
         "type": "knowledge_question",
         "topic": topic,
-        "note": "The model will answer this using its own knowledge. No DB query needed."
+        "note": "The model will answer this using its own knowledge. No limitDB query needed."
     }
 
 
@@ -50,49 +50,161 @@ def getSkincareKnowledge(
 def searchProducts(
         session: Session,
         db: DBSession,
+        query: Optional[str] = None,
+        sku: Optional[str] = None,
         category: Optional[str] = None,
         skinType: Optional[str] = None,
         concern: Optional[str] = None,
-        maxPrice: Optional[float] = None
+        brand: Optional[str] = None,
+        minPrice: Optional[float] = None,
+        maxPrice: Optional[float] = None,
+        stock: Optional[bool] = None,
+        limit: int = 10
 ) -> dict:
     """
-    Search products by filters.
-    All filters are optional.
-    Returns a list of products (max 8 to keep response manageable).
+    Robust product search with multiple filters and fallback logic.
+    
+    All filters are optional. When multiple filters are provided,
+    results must match ALL filters (AND logic).
+    
+    Handles compound categories: searching for "essence" or "serums"
+    will match products with category "Essence / Serums".
+    
+    Fallback: If exact filters return no results, searches with looser criteria.
     """
-    query = db.query(Product)
-
-    # ── Filter by category ──
-    if category:
-        query = query.filter(Product.category.ilike(f"%{category}%"))
-
-    # ── Filter by skin type ──
-    # skin_types column is a comma-separated string: "oily,dry,combination"
-    if skinType:
-        query = query.filter(Product.skin_types.ilike(f"%{skinType}%"))
-
-    # ── Filter by concern ──
-    # concerns column is also comma-separated: "acne,dryness,aging"
-    if concern:
-        query = query.filter(Product.concerns.ilike(f"%{concern}%"))
-
-    # ── Filter by price ──
-    if maxPrice is not None:
-        query = query.filter(Product.price <= maxPrice)
-
-    # ── Execute ──
-    products = query.limit(8).all()
-
+    
+    def build_query(base_query, strict: bool = True):
+        """Build query with filters. If strict=False, loosens some criteria."""
+        q = base_query
+        
+        # ── Free-text query (name, description, ingredients) ──
+        if query:
+            search_term = f"%{query}%"
+            q = q.filter(or_(
+                Product.name.ilike(search_term),
+                Product.description.ilike(search_term),
+                Product.ingredients.ilike(search_term) if Product.ingredients else False
+            ))
+        
+        # ── SKU search (exact or partial) ──
+        if sku:
+            q = q.filter(Product.sku.ilike(f"%{sku}%"))
+        
+        # ── Brand search ──
+        if brand:
+            q = q.filter(Product.brand.ilike(f"%{brand}%"))
+        
+        # ── Category search with compound category support ──
+        if category:
+            cat_lower = category.lower()
+            # Split category by "/" to handle compound categories
+            # e.g., "essence / serums" → ["essence", "serums"]
+            cat_parts = [part.strip() for part in category.split("/")]
+            
+            # Match if ANY part of the search category is in the product category
+            or_conditions = [Product.category.ilike(f"%{part}%") for part in cat_parts]
+            q = q.filter(or_(*or_conditions))
+        
+        # ── Skin type search (comma-separated field) ──
+        if skinType:
+            q = q.filter(Product.skin_types.ilike(f"%{skinType}%"))
+        
+        # ── Concern search (comma-separated field) ──
+        if concern:
+            q = q.filter(Product.concerns.ilike(f"%{concern}%"))
+        
+        # ── Price range ──
+        if minPrice is not None:
+            q = q.filter(Product.price >= minPrice)
+        if maxPrice is not None:
+            q = q.filter(Product.price <= maxPrice)
+        
+        # ── Stock availability ──
+        if stock is not None:
+            if stock:
+                q = q.filter(Product.stock > 0)
+            else:
+                q = q.filter(Product.stock == 0)
+        
+        return q
+    
+    # ── Attempt strict search first ──
+    base_query = db.query(Product)
+    strict_query = build_query(base_query, strict=True)
+    products = strict_query.limit(limit).all()
+    filters_applied = "strict"
+    
+    # ── Fallback 1: If no results and multiple filters, try without category ──
+    if not products and category and (query or concern or brand):
+        base_query = db.query(Product)
+        fallback_query = db.query(Product)
+        # Rebuild without category
+        if query:
+            search_term = f"%{query}%"
+            fallback_query = fallback_query.filter(or_(
+                Product.name.ilike(search_term),
+                Product.description.ilike(search_term),
+                Product.ingredients.ilike(search_term) if Product.ingredients else False
+            ))
+        if brand:
+            fallback_query = fallback_query.filter(Product.brand.ilike(f"%{brand}%"))
+        if concern:
+            fallback_query = fallback_query.filter(Product.concerns.ilike(f"%{concern}%"))
+        if minPrice is not None:
+            fallback_query = fallback_query.filter(Product.price >= minPrice)
+        if maxPrice is not None:
+            fallback_query = fallback_query.filter(Product.price <= maxPrice)
+        if stock is not None:
+            if stock:
+                fallback_query = fallback_query.filter(Product.stock > 0)
+            else:
+                fallback_query = fallback_query.filter(Product.stock == 0)
+        
+        products = fallback_query.limit(limit).all()
+        filters_applied = "fallback_1_no_category"
+    
+    # ── Fallback 2: If still no results and query provided, search by query alone ──
+    if not products and query:
+        search_term = f"%{query}%"
+        fallback_query = db.query(Product).filter(or_(
+            Product.name.ilike(search_term),
+            Product.description.ilike(search_term),
+            Product.ingredients.ilike(search_term) if Product.ingredients else False
+        ))
+        if stock is not None:
+            if stock:
+                fallback_query = fallback_query.filter(Product.stock > 0)
+            else:
+                fallback_query = fallback_query.filter(Product.stock == 0)
+        
+        products = fallback_query.limit(limit).all()
+        filters_applied = "fallback_2_query_only"
+    
+    # ── Fallback 3: If still no results, return popular/high-stock products ──
+    if not products:
+        fallback_query = db.query(Product)
+        if stock is None or stock:  # Show in-stock items by default
+            fallback_query = fallback_query.filter(Product.stock > 0)
+        products = fallback_query.order_by(Product.stock.desc()).limit(limit).all()
+        filters_applied = "fallback_3_popular"
+    
     if not products:
         return {
             "found": False,
             "message": "No products found matching those filters.",
             "filters_used": {
+                "query": query,
+                "sku": sku,
                 "category": category,
                 "skinType": skinType,
                 "concern": concern,
-                "maxPrice": maxPrice
-            }
+                "brand": brand,
+                "minPrice": minPrice,
+                "maxPrice": maxPrice,
+                "stock": stock,
+                "limit": limit
+            },
+            "fallback_applied": filters_applied
         }
 
     # ── Update session.lastShownProducts ──
@@ -112,6 +224,7 @@ def searchProducts(
     return {
         "found": True,
         "count": len(products),
+        "fallback_applied": filters_applied if filters_applied != "strict" else None,
         "products": [
             {
                 "position": i + 1,

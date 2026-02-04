@@ -16,13 +16,13 @@
 import asyncio
 import uuid
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session as DBSession
 
 from database import get_db, init_db
 from models import Product
-from session import create_session, destroy_session
+from session import create_session, get_session, destroy_session
 from chat import parse_customer_info, complete_checkout
 import config
 
@@ -127,13 +127,20 @@ async def websocket_chat(websocket: WebSocket, db: DBSession = Depends(get_db)):
                 if customer_info:
                     # Valid info → complete the order
                     await complete_checkout(customer_info, session, db, websocket)
+                    # Save to history
+                    session.add_to_history("user", user_message)
+                    session.add_to_history("assistant", f"Order placed for {customer_info['name']}")
                 else:
                     # Invalid format → ask again
-                    await websocket.send_text(
+                    response_text = (
                         "I couldn't parse that. Please send your details like this:\n"
                         "Name: John Doe, Phone: 09123456789, Address: 123 Main St"
                     )
+                    await websocket.send_text(response_text)
                     await websocket.send_text("__END__")
+                    # Save to history
+                    session.add_to_history("user", user_message)
+                    session.add_to_history("assistant", response_text)
 
             else:
                 # ── Normal flow: handle message through agentic loop ──
@@ -165,25 +172,22 @@ async def handle_message_with_streaming(
         websocket: WebSocket
 ):
     """
-    The agentic loop with character-by-character streaming.
+    The agentic loop with character-by-character streaming + conversation history.
 
     Flow:
-    1. Build messages with system prompt + user message
+    1. Get messages from session (includes history + system prompt)
     2. Call NVIDIA API (non-streaming to check for tool calls)
     3. If tool_calls → execute them, append results, loop
     4. If text response → STREAM it character-by-character
+    5. Save user message + assistant response to history
     """
     import requests
     import json
-    from chat import build_system_prompt, execute_tool_call, handle_checkout_flow
+    from chat import execute_tool_call, handle_checkout_flow
     from tools import TOOLS
 
-    # ── Build messages ──
-    system_prompt = build_system_prompt(session)
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_message}
-    ]
+    # ── Build messages with history ──
+    messages = session.get_messages_for_api(user_message)
 
     # ── Agentic loop ──
     max_iterations = 10
@@ -233,6 +237,11 @@ async def handle_message_with_streaming(
                 await asyncio.sleep(0.01)  # 10ms per char = ~100 chars/sec
 
             await websocket.send_text("__END__")  # Signal end
+
+            # ── Save to conversation history ──
+            session.add_to_history("user", user_message)
+            session.add_to_history("assistant", final_text)
+
             return
 
         # ── Execute tool calls ──
@@ -251,6 +260,11 @@ async def handle_message_with_streaming(
                 # Trigger checkout flow
                 await handle_checkout_flow(session, db, websocket, result)
                 await websocket.send_text("__END__")
+
+                # Save to history
+                session.add_to_history("user", user_message)
+                session.add_to_history("assistant", "Starting checkout process...")
+
                 return
 
             # Add tool result to messages
