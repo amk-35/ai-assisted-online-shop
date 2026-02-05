@@ -13,7 +13,7 @@
 # ============================================================
 
 import json
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 
 
@@ -43,6 +43,16 @@ class UserProfile:
     concerns: List[str] = field(default_factory=list)  # ["acne", "hydration", ...]
 
 
+@dataclass
+class SearchContext:
+    """Stores pagination state for product searches."""
+    filters: Dict[str, Any] = field(default_factory=dict)  # Last search filters
+    total_count: int = 0  # Total matching products
+    shown_product_ids: List[int] = field(default_factory=list)  # All shown IDs
+    page: int = 1  # Current page
+    has_more: bool = False  # More results available?
+
+
 class Session:
     """
     Per-connection session state.
@@ -57,6 +67,7 @@ class Session:
         self.awaiting_checkout = False  # Flag: waiting for customer info
         self.conversation_history: List[Dict[str, str]] = []  # Stores last 10 messages
         self.conversation_summary: Optional[str] = None  # Summary of older messages
+        self.search_context: Optional[SearchContext] = None  # Product search pagination
 
     # ── Cart operations ──────────────────────────────────────
 

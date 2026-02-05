@@ -1,18 +1,18 @@
 # ============================================================
-# functions.py — Tool function implementations
+# functions.py — Tool function implementations (ENHANCED)
 # ============================================================
-# Each function here corresponds to a tool definition in tools.py.
-# They are called by the agentic loop when Mistral returns tool_calls.
-#
-# All functions return dict (serialized to JSON for the model).
-# All functions receive a Session object + DB session.
+# CHANGES FROM PREVIOUS VERSION:
+# - searchProducts() now tracks pagination state
+# - Exposes total count ("showing 6 of 43")
+# - Smart exclusion of already-shown products
+# - New function: searchMoreProducts() for explicit pagination
 # ============================================================
 
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session as DBSession
 from sqlalchemy import or_, and_
 from models import Product, Order, OrderItem
-from session import Session, ShownProduct
+from session import Session, ShownProduct, SearchContext
 import json
 
 
@@ -27,24 +27,16 @@ def getSkincareKnowledge(
         skinType: Optional[str] = None,
         concern: Optional[str] = None
 ) -> dict:
-    """
-    This function doesn't actually need to DO anything —
-    the model answers using its own knowledge.
-
-    We just return a signal that tells the orchestrator:
-    "Let the model answer this directly, don't inject a result."
-
-    OR, if you have a curated knowledge base, query it here.
-    """
+    """The model answers using its own knowledge."""
     return {
         "type": "knowledge_question",
         "topic": topic,
-        "note": "The model will answer this using its own knowledge. No limitDB query needed."
+        "note": "The model will answer this using its own knowledge."
     }
 
 
 # ============================================================
-# PRODUCTS
+# PRODUCTS — ENHANCED WITH PAGINATION
 # ============================================================
 
 def searchProducts(
@@ -59,155 +51,116 @@ def searchProducts(
         minPrice: Optional[float] = None,
         maxPrice: Optional[float] = None,
         stock: Optional[bool] = None,
-        limit: int = 10
+        limit: int = 6
 ) -> dict:
     """
-    Robust product search with multiple filters and fallback logic.
-    
-    All filters are optional. When multiple filters are provided,
-    results must match ALL filters (AND logic).
-    
-    Handles compound categories: searching for "essence" or "serums"
-    will match products with category "Essence / Serums".
-    
-    Fallback: If exact filters return no results, searches with looser criteria.
+    Enhanced product search with pagination support.
+
+    Features:
+    - Exposes total count ("showing 6 of 43")
+    - Tracks already-shown products per search
+    - Auto-excludes shown products when same filters
+    - Resets when filters change
     """
-    
-    def build_query(base_query, strict: bool = True):
-        """Build query with filters. If strict=False, loosens some criteria."""
-        q = base_query
-        
-        # ── Free-text query (name, description, ingredients) ──
-        if query:
-            search_term = f"%{query}%"
-            q = q.filter(or_(
-                Product.name.ilike(search_term),
-                Product.description.ilike(search_term),
-                Product.ingredients.ilike(search_term) if Product.ingredients else False
-            ))
-        
-        # ── SKU search (exact or partial) ──
-        if sku:
-            q = q.filter(Product.sku.ilike(f"%{sku}%"))
-        
-        # ── Brand search ──
-        if brand:
-            q = q.filter(Product.brand.ilike(f"%{brand}%"))
-        
-        # ── Category search with compound category support ──
-        if category:
-            cat_lower = category.lower()
-            # Split category by "/" to handle compound categories
-            # e.g., "essence / serums" → ["essence", "serums"]
-            cat_parts = [part.strip() for part in category.split("/")]
-            
-            # Match if ANY part of the search category is in the product category
-            or_conditions = [Product.category.ilike(f"%{part}%") for part in cat_parts]
-            q = q.filter(or_(*or_conditions))
-        
-        # ── Skin type search (comma-separated field) ──
-        if skinType:
-            q = q.filter(Product.skin_types.ilike(f"%{skinType}%"))
-        
-        # ── Concern search (comma-separated field) ──
-        if concern:
-            q = q.filter(Product.concerns.ilike(f"%{concern}%"))
-        
-        # ── Price range ──
-        if minPrice is not None:
-            q = q.filter(Product.price >= minPrice)
-        if maxPrice is not None:
-            q = q.filter(Product.price <= maxPrice)
-        
-        # ── Stock availability ──
-        if stock is not None:
-            if stock:
-                q = q.filter(Product.stock > 0)
-            else:
-                q = q.filter(Product.stock == 0)
-        
-        return q
-    
-    # ── Attempt strict search first ──
+
+    # ── Build current filters dict ──
+    current_filters = {
+        "query": query,
+        "sku": sku,
+        "category": category,
+        "skinType": skinType,
+        "concern": concern,
+        "brand": brand,
+        "minPrice": minPrice,
+        "maxPrice": maxPrice,
+        "stock": stock,
+        "limit": limit
+    }
+
+    # Clean for comparison (remove None values)
+    current_filters_clean = {k: v for k, v in current_filters.items() if v is not None}
+
+    # ── Check if filters match previous search ──
+    filters_match = False
+    exclude_ids = []
+
+    if session.search_context:
+        prev_filters_clean = {k: v for k, v in session.search_context.filters.items() if v is not None}
+        filters_match = (current_filters_clean == prev_filters_clean)
+
+        if filters_match:
+            exclude_ids = session.search_context.shown_product_ids.copy()
+
+    # ── Reset if filters changed ──
+    if not filters_match:
+        session.search_context = None
+        exclude_ids = []
+
+    # ── Build base query ──
     base_query = db.query(Product)
-    strict_query = build_query(base_query, strict=True)
-    products = strict_query.limit(limit).all()
-    filters_applied = "strict"
-    
-    # ── Fallback 1: If no results and multiple filters, try without category ──
-    if not products and category and (query or concern or brand):
-        base_query = db.query(Product)
-        fallback_query = db.query(Product)
-        # Rebuild without category
-        if query:
-            search_term = f"%{query}%"
-            fallback_query = fallback_query.filter(or_(
-                Product.name.ilike(search_term),
-                Product.description.ilike(search_term),
-                Product.ingredients.ilike(search_term) if Product.ingredients else False
-            ))
-        if brand:
-            fallback_query = fallback_query.filter(Product.brand.ilike(f"%{brand}%"))
-        if concern:
-            fallback_query = fallback_query.filter(Product.concerns.ilike(f"%{concern}%"))
-        if minPrice is not None:
-            fallback_query = fallback_query.filter(Product.price >= minPrice)
-        if maxPrice is not None:
-            fallback_query = fallback_query.filter(Product.price <= maxPrice)
-        if stock is not None:
-            if stock:
-                fallback_query = fallback_query.filter(Product.stock > 0)
-            else:
-                fallback_query = fallback_query.filter(Product.stock == 0)
-        
-        products = fallback_query.limit(limit).all()
-        filters_applied = "fallback_1_no_category"
-    
-    # ── Fallback 2: If still no results and query provided, search by query alone ──
-    if not products and query:
-        search_term = f"%{query}%"
-        fallback_query = db.query(Product).filter(or_(
-            Product.name.ilike(search_term),
-            Product.description.ilike(search_term),
-            Product.ingredients.ilike(search_term) if Product.ingredients else False
-        ))
-        if stock is not None:
-            if stock:
-                fallback_query = fallback_query.filter(Product.stock > 0)
-            else:
-                fallback_query = fallback_query.filter(Product.stock == 0)
-        
-        products = fallback_query.limit(limit).all()
-        filters_applied = "fallback_2_query_only"
-    
-    # ── Fallback 3: If still no results, return popular/high-stock products ──
-    if not products:
-        fallback_query = db.query(Product)
-        if stock is None or stock:  # Show in-stock items by default
-            fallback_query = fallback_query.filter(Product.stock > 0)
-        products = fallback_query.order_by(Product.stock.desc()).limit(limit).all()
-        filters_applied = "fallback_3_popular"
-    
+
+    # Apply filters
+    filtered_query = _apply_filters(
+        base_query,
+        query_text=query,
+        sku=sku,
+        category=category,
+        skinType=skinType,
+        concern=concern,
+        brand=brand,
+        minPrice=minPrice,
+        maxPrice=maxPrice,
+        stock=stock
+    )
+
+    # ── Exclude already-shown products ──
+    if exclude_ids:
+        filtered_query = filtered_query.filter(~Product.id.in_(exclude_ids))
+
+    # ── Get total count BEFORE limit ──
+    total_count = filtered_query.count()
+
+    # ── Get this page's results ──
+    products = filtered_query.order_by(Product.stock.desc()).limit(limit).all()
+
+    # ── Handle exhaustion ──
+    if not products and exclude_ids:
+        return {
+            "found": False,
+            "exhausted": True,
+            "message": f"No more products matching those filters. You've seen all {len(exclude_ids)} results.",
+            "total_shown": len(exclude_ids)
+        }
+
+    # ── Standard fallback ──
     if not products:
         return {
             "found": False,
-            "message": "No products found matching those filters.",
-            "filters_used": {
-                "query": query,
-                "sku": sku,
-                "category": category,
-                "skinType": skinType,
-                "concern": concern,
-                "brand": brand,
-                "minPrice": minPrice,
-                "maxPrice": maxPrice,
-                "stock": stock,
-                "limit": limit
-            },
-            "fallback_applied": filters_applied
+            "message": "No products found matching those filters. Try different search terms.",
+            "filters_used": current_filters
         }
 
-    # ── Update session.lastShownProducts ──
+    # ── Update search context ──
+    new_shown_ids = exclude_ids + [p.id for p in products]
+    has_more = (len(new_shown_ids) < total_count)
+
+    if session.search_context and filters_match:
+        # Update existing
+        session.search_context.shown_product_ids = new_shown_ids
+        session.search_context.page += 1
+        session.search_context.has_more = has_more
+        session.search_context.total_count = total_count
+    else:
+        # Create new
+        session.search_context = SearchContext(
+            filters=current_filters,
+            total_count=total_count,
+            shown_product_ids=new_shown_ids,
+            page=1,
+            has_more=has_more
+        )
+
+    # ── Update lastShownProducts (for "add that one") ──
     shown = [
         ShownProduct(
             position=i + 1,
@@ -220,11 +173,15 @@ def searchProducts(
     ]
     session.update_last_shown(shown)
 
-    # ── Return results ──
+    # ── Return with pagination metadata ──
     return {
         "found": True,
         "count": len(products),
-        "fallback_applied": filters_applied if filters_applied != "strict" else None,
+        "total": total_count,
+        "page": session.search_context.page,
+        "hasMore": has_more,
+        "showing": f"{len(products)} of {total_count}" if has_more else f"all {total_count}",
+        "totalShown": len(new_shown_ids),
         "products": [
             {
                 "position": i + 1,
@@ -235,13 +192,96 @@ def searchProducts(
                 "category": p.category,
                 "price": p.price,
                 "stock": p.stock,
-                "description": p.description[:150] + "..." if len(p.description) > 150 else p.description,
+                "description": p.description[:150] + "..." if p.description and len(p.description) > 150 else (
+                            p.description or ""),
                 "skinTypes": p.skin_types,
-                "concerns": p.concerns
+                "concerns": p.concerns,
+                "volume": p.volume
             }
             for i, p in enumerate(products)
         ]
     }
+
+
+def _apply_filters(
+        query,
+        query_text: Optional[str] = None,
+        sku: Optional[str] = None,
+        category: Optional[str] = None,
+        skinType: Optional[str] = None,
+        concern: Optional[str] = None,
+        brand: Optional[str] = None,
+        minPrice: Optional[float] = None,
+        maxPrice: Optional[float] = None,
+        stock: Optional[bool] = None
+):
+    """Helper to apply all filters to a query."""
+
+    if query_text:
+        search_term = f"%{query_text}%"
+        query = query.filter(or_(
+            Product.name.ilike(search_term),
+            Product.description.ilike(search_term),
+            Product.ingredients.ilike(search_term) if Product.ingredients else False
+        ))
+
+    if sku:
+        query = query.filter(Product.sku.ilike(f"%{sku}%"))
+
+    if brand:
+        query = query.filter(Product.brand.ilike(f"%{brand}%"))
+
+    if category:
+        cat_parts = [part.strip() for part in category.split("/")]
+        or_conditions = [Product.category.ilike(f"%{part}%") for part in cat_parts]
+        query = query.filter(or_(*or_conditions))
+
+    if skinType:
+        query = query.filter(Product.skin_types.ilike(f"%{skinType}%"))
+
+    if concern:
+        query = query.filter(Product.concerns.ilike(f"%{concern}%"))
+
+    if minPrice is not None:
+        query = query.filter(Product.price >= minPrice)
+    if maxPrice is not None:
+        query = query.filter(Product.price <= maxPrice)
+
+    if stock is not None:
+        query = query.filter(Product.stock > 0 if stock else Product.stock == 0)
+
+    return query
+
+
+def searchMoreProducts(
+        session: Session,
+        db: DBSession
+) -> dict:
+    """
+    Get next page from the last search.
+    Reuses saved filters and excludes already-shown products.
+    """
+
+    if not session.search_context:
+        return {
+            "error": True,
+            "message": "No previous search to continue. Try searching for products first."
+        }
+
+    if not session.search_context.has_more:
+        total = session.search_context.total_count
+        shown = len(session.search_context.shown_product_ids)
+        return {
+            "found": False,
+            "exhausted": True,
+            "message": f"You've already seen all {shown} matching products (out of {total} total)."
+        }
+
+    # Reuse previous filters
+    filters = session.search_context.filters
+
+    # Call searchProducts with same filters (it will auto-exclude shown products)
+    return searchProducts(session=session, db=db, **filters)
 
 
 def getProductDetail(
@@ -249,10 +289,7 @@ def getProductDetail(
         db: DBSession,
         productId: int
 ) -> dict:
-    """
-    Get full details for one product.
-    Returns ingredients, full description, etc.
-    """
+    """Get full details for one product."""
     product = db.query(Product).filter(Product.id == productId).first()
 
     if not product:
@@ -285,11 +322,8 @@ def getProductDetail(
 # CART
 # ============================================================
 
-def getCartState(
-        session: Session,
-        db: DBSession
-) -> dict:
-    """Get the current cart contents."""
+def getCartState(session: Session, db: DBSession) -> dict:
+    """Get current cart contents."""
     items = session.get_cart_items()
 
     if not items:
@@ -321,10 +355,7 @@ def addToCart(
         productId: int,
         quantity: int = 1
 ) -> dict:
-    """
-    Add a product to the cart.
-    Fetch product from DB to get name and price.
-    """
+    """Add a product to cart."""
     product = db.query(Product).filter(Product.id == productId).first()
 
     if not product:
@@ -354,12 +385,8 @@ def addToCart(
     }
 
 
-def removeFromCart(
-        session: Session,
-        db: DBSession,
-        productId: int
-) -> dict:
-    """Remove a product from the cart."""
+def removeFromCart(session: Session, db: DBSession, productId: int) -> dict:
+    """Remove a product from cart."""
     if productId not in session.cart:
         return {
             "success": False,
@@ -383,7 +410,7 @@ def updateCartItem(
         productId: int,
         quantity: int
 ) -> dict:
-    """Update quantity of a cart item."""
+    """Update quantity of cart item."""
     if productId not in session.cart:
         return {
             "success": False,
@@ -393,7 +420,6 @@ def updateCartItem(
     if quantity == 0:
         return removeFromCart(session, db, productId)
 
-    # Check stock
     product = db.query(Product).filter(Product.id == productId).first()
     if product and product.stock < quantity:
         return {
@@ -415,17 +441,8 @@ def updateCartItem(
 # ORDERS
 # ============================================================
 
-def initiateOrder(
-        session: Session,
-        db: DBSession
-) -> dict:
-    """
-    Initiate the order process.
-    This does NOT place the order yet — it signals the orchestrator
-    to start collecting customer info (name, phone, address).
-
-    Returns a special signal that the orchestrator recognizes.
-    """
+def initiateOrder(session: Session, db: DBSession) -> dict:
+    """Initiate order process (triggers customer info collection)."""
     items = session.get_cart_items()
 
     if not items:
@@ -434,7 +451,6 @@ def initiateOrder(
             "message": "Your cart is empty. Add some products before placing an order."
         }
 
-    # Return a signal to the orchestrator
     return {
         "type": "initiate_checkout",
         "cartSummary": {
@@ -460,13 +476,7 @@ def finalizeOrder(
         phone: str,
         address: str
 ) -> dict:
-    """
-    Actually create the order in the database.
-    Called AFTER customer info is collected.
-
-    This is NOT a tool — it's called directly by the orchestrator
-    after the user provides name/phone/address.
-    """
+    """Create order in DB after collecting customer info."""
     items = session.get_cart_items()
 
     if not items:
@@ -475,7 +485,6 @@ def finalizeOrder(
             "message": "Cart is empty. Cannot place order."
         }
 
-    # ── Create Order ──
     order = Order(
         customer_name=customer_name,
         phone=phone,
@@ -483,29 +492,26 @@ def finalizeOrder(
         status="pending"
     )
     db.add(order)
-    db.flush()  # Get the order.id before adding items
+    db.flush()
 
-    # ── Create OrderItems ──
     for item in items:
         order_item = OrderItem(
             order_id=order.id,
             product_id=item.product_id,
             quantity=item.quantity,
-            price=item.price  # Snapshot price
+            price=item.price
         )
         db.add(order_item)
 
     db.commit()
 
-    # ── Clear cart and lastShownProducts ──
     session.clear_cart()
     session.clear_last_shown()
 
-    # ── Return order confirmation ──
     return {
         "success": True,
         "orderId": order.id,
-        "message": f"Order placed successfully! Your order ID is {order.id}. Keep this for tracking.",
+        "message": f"Order placed successfully! Your order ID is {order.id}.",
         "orderSummary": {
             "orderId": order.id,
             "customerName": customer_name,
@@ -516,12 +522,8 @@ def finalizeOrder(
     }
 
 
-def getOrderInfo(
-        session: Session,
-        db: DBSession,
-        orderId: str
-) -> dict:
-    """Look up an order by ID."""
+def getOrderInfo(session: Session, db: DBSession, orderId: str) -> dict:
+    """Look up order by ID."""
     order = db.query(Order).filter(Order.id == orderId.upper()).first()
 
     if not order:
@@ -530,7 +532,6 @@ def getOrderInfo(
             "message": f"No order found with ID {orderId}."
         }
 
-    # ── Load items ──
     items = []
     for order_item in order.items:
         items.append({
@@ -561,13 +562,11 @@ def getOrderInfo(
 # ============================================================
 # FUNCTION REGISTRY
 # ============================================================
-# Maps function names (from tool_calls) to actual Python functions.
-# The orchestrator uses this to dispatch dynamically.
-# ============================================================
 
 FUNCTION_REGISTRY = {
     "getSkincareKnowledge": getSkincareKnowledge,
     "searchProducts": searchProducts,
+    "searchMoreProducts": searchMoreProducts,  # NEW
     "getProductDetail": getProductDetail,
     "getCartState": getCartState,
     "addToCart": addToCart,
@@ -575,5 +574,4 @@ FUNCTION_REGISTRY = {
     "updateCartItem": updateCartItem,
     "initiateOrder": initiateOrder,
     "getOrderInfo": getOrderInfo,
-    # Note: finalizeOrder is NOT in the registry — it's called directly by the orchestrator
 }

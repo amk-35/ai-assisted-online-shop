@@ -1,14 +1,5 @@
 # ============================================================
-# tools.py — Mistral tool definitions
-# ============================================================
-# These JSON schemas are what Mistral reads to decide:
-#   - Which function to call
-#   - What parameters to pass
-#   - When NOT to call a function (just reply with text)
-#
-# The "description" fields are critical — they are your
-# instruction layer to the model. Write them like you're
-# telling a smart assistant when and why to use each tool.
+# tools.py — Mistral tool definitions (UPDATED WITH PAGINATION)
 # ============================================================
 
 TOOLS = [
@@ -53,15 +44,23 @@ TOOLS = [
         "function": {
             "name": "searchProducts",
             "description": (
-                "Search our store's product catalog with robust fallback logic. Use this to: "
+                "Search our store's product catalog with robust fallback logic and pagination support. "
+                "Returns up to [limit] products with total count metadata like 'showing 6 of 43'. "
+                "Use this to: "
                 "1) Browse products by free-text query, category, brand, or other filters, "
                 "2) Find recommendations based on skin type or concern, "
                 "3) Surface relevant products alongside knowledge answers. "
-                "Handles compound categories like 'Essence / Serums' — searching 'essence' or 'serums' "
-                "individually will match those products. "
+                "If the same search is repeated, automatically excludes previously-shown products. "
+                "Handles compound categories like 'Essence / Serums' — searching 'essence' or 'serums' works. "
                 "If no results with all filters, automatically falls back to looser criteria. "
-                "Leave any filter you don't have info on as null — the function handles partial filters. "
-                "Call this ALWAYS when answering skincare knowledge questions."
+                "Call this ALWAYS when answering skincare knowledge questions. "
+                "When user asks for 'more' of the SAME search, use searchMoreProducts() instead."
+                "If user says: "
+                  "around 30000 → min_price: 20000, max_price: 40000"
+                  "between 15000 and 25000 → min_price: 15000, max_price: 25000"
+                  "cheap → max_price: 20000"
+                  "premium → min_price: 500000"
+                "If user ask with tell me more about the ....., search that with just query parameter."
             ),
             "parameters": {
                 "type": "object",
@@ -76,7 +75,7 @@ TOOLS = [
                     },
                     "category": {
                         "type": "string",
-                        "description": "Product category. e.g. 'cleanser', 'moisturizer', 'serum', 'essence', 'toner', 'sunscreen'. Works with compound categories like 'Essence / Serums'."
+                        "description": "Product category. e.g. 'cleanser', 'moisturizer / moisturiser', 'serum', 'essence', 'toner', 'sunscreen'"
                     },
                     "skinType": {
                         "type": "string",
@@ -85,11 +84,11 @@ TOOLS = [
                     },
                     "concern": {
                         "type": "string",
-                        "description": "Filter by concern. e.g. 'acne', 'anti-aging', 'dryness', 'brightening', 'sensitivity'"
+                        "description": "Filter by concern. e.g. 'acne', 'anti-aging', 'dryness', 'brightening'"
                     },
                     "brand": {
                         "type": "string",
-                        "description": "Filter by brand name. e.g. 'The Ordinary', 'CeraVe', 'Cetaphil'"
+                        "description": "Filter by brand name"
                     },
                     "minPrice": {
                         "type": "number",
@@ -97,18 +96,40 @@ TOOLS = [
                     },
                     "maxPrice": {
                         "type": "number",
-                        "description": "Maximum price filter if the user mentioned a budget"
+                        "description": "Maximum price filter"
                     },
                     "stock": {
                         "type": "boolean",
-                        "description": "Filter by availability. true = in stock only, false = out of stock only. null = all products."
+                        "description": "Filter by availability. true = in stock only, false = out of stock only"
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Max number of results to return. Default: 6. Max: 20.",
+                        "description": "Max number of results to return. Default: 6.",
                         "default": 6
                     }
                 },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "searchMoreProducts",
+            "description": (
+                "Get MORE products from the previous search. Use this when user says: "
+                "'show me more', 'what else?', 'see other options', 'next', 'different ones', or similar. "
+                "This continues the last search with the SAME filters but shows NEW products "
+                "that haven't been shown yet (automatically excludes already-shown products). "
+                "Returns an error if there's no previous search or all matching products have been shown. "
+                "IMPORTANT: Only use this if the user is explicitly asking for MORE of the SAME search, "
+                "NOT if they're changing filters or asking a completely different question. "
+                "Examples: 'show me more serums' after already showing serums → use this. "
+                "'show me moisturizers' after showing serums → use searchProducts instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
                 "required": []
             }
         }
@@ -162,7 +183,7 @@ TOOLS = [
                 "Add a product to the user's cart. "
                 "Resolve references first. If the user says 'add that one' or 'add the first one', "
                 "look at lastShownProducts in the system prompt context to find the correct productId. "
-                "Only use productIds you can see in the context — never guess."
+                "Only use productIds you can see in the context — never guess. "
                 "If you are sure, don't ask back to user."
             ),
             "parameters": {

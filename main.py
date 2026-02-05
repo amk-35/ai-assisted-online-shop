@@ -14,11 +14,15 @@
 # ============================================================
 
 import asyncio
+import os
+import shutil
+import time
 import uuid
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, UploadFile, HTTPException, Form, File
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session as DBSession
+from sqlalchemy.orm import Session as DBSession, Session
+from starlette.responses import RedirectResponse
 
 from database import get_db, init_db
 from models import Product
@@ -234,7 +238,7 @@ async def handle_message_with_streaming(
             # Stream character by character
             for char in final_text:
                 await websocket.send_text(char)
-                await asyncio.sleep(0.01)  # 10ms per char = ~100 chars/sec
+                await asyncio.sleep(0.02)  # 10ms per char = ~100 chars/sec
 
             await websocket.send_text("__END__")  # Signal end
 
@@ -280,6 +284,346 @@ async def handle_message_with_streaming(
     # ── Max iterations reached ──
     await websocket.send_text("Processing took too long. Please try again.")
     await websocket.send_text("__END__")
+
+
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_home(
+    category: str = None,
+    skin_type: str = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Admin dashboard with category and skin type filtering.
+    Query params: ?category=Cleanser&skin_type=oily
+    """
+    
+    # Get all categories for the dropdown
+    all_categories = db.query(Product.category).distinct().all()
+    category_list = sorted([cat[0] for cat in all_categories if cat[0]])
+    
+    # Get all skin types for the dropdown
+    all_skin_types_entries = db.query(Product.skin_types).all()
+    skin_types_set = set()
+    for entry in all_skin_types_entries:
+        if entry[0]:
+            types = [st.strip() for st in entry[0].split(",") if st.strip()]
+            skin_types_set.update(types)
+    skin_types_list = sorted(list(skin_types_set))
+    
+    # Filter products by category and/or skin type
+    query = db.query(Product)
+    if category:
+        query = query.filter(Product.category.ilike(f"%{category}%"))
+    if skin_type:
+        query = query.filter(Product.skin_types.ilike(f"%{skin_type}%"))
+    
+    products = query.all()
+    
+    # Build table rows
+    rows = "".join([
+        f"<tr><td>{p.id}</td><td>{p.name}</td><td>{p.price}</td><td>{p.stock}</td>"
+        f"<td><img src='/images/{p.image_filename}' width='60'></td>"
+        f"<td><a href='/admin/edit/{p.id}'>Edit</a> | "
+        f"<a href='/admin/delete/{p.id}'>Delete</a></td></tr>"
+        for p in products
+    ])
+    
+    # Build category dropdown options
+    category_options = "".join([
+        f"<option value='{cat}' {'selected' if category == cat else ''}>{cat}</option>"
+        for cat in category_list
+    ])
+    
+    # Build skin type dropdown options
+    skin_type_options = "".join([
+        f"<option value='{st}' {'selected' if skin_type == st else ''}>{st}</option>"
+        for st in skin_types_list
+    ])
+    
+    html = f"""
+    <h1>Admin - Product Management</h1>
+    <a href="/admin/new">➕ Add Product</a>
+    
+    <div style="margin: 15px 0;">
+        <label for="category-filter">Filter by Category:</label>
+        <select id="category-filter" onchange="applyFilters()">
+            <option value="">-- All Categories --</option>
+            {category_options}
+        </select>
+        
+        <label for="skin-type-filter" style="margin-left: 20px;">Filter by Skin Type:</label>
+        <select id="skin-type-filter" onchange="applyFilters()">
+            <option value="">-- All Skin Types --</option>
+            {skin_type_options}
+        </select>
+    </div>
+    
+    <table border="1" cellpadding="6">
+        <tr><th>ID</th><th>Name</th><th>Price</th><th>Stock</th><th>Image</th><th>Actions</th></tr>
+        {rows}
+    </table>
+    
+    <script>
+        function applyFilters() {{
+            const selectedCategory = document.getElementById('category-filter').value;
+            const selectedSkinType = document.getElementById('skin-type-filter').value;
+            
+            let url = '/admin';
+            const params = [];
+            
+            if (selectedCategory) {{
+                params.push(`category=${{selectedCategory}}`);
+            }}
+            if (selectedSkinType) {{
+                params.push(`skin_type=${{selectedSkinType}}`);
+            }}
+            
+            if (params.length > 0) {{
+                url += '?' + params.join('&');
+            }}
+            
+            window.location.href = url;
+        }}
+    </script>
+    """
+    return html
+
+
+@app.get("/admin/new", response_class=HTMLResponse)
+def new_product_form():
+    return """
+    <h2>Add Product</h2>
+    <form method="post" action="/admin/new" enctype="multipart/form-data">
+        SKU: <input name="sku"><br>
+        Name: <input name="name"><br>
+        Category: <input name="category"><br>
+        Price: <input name="price"><br>
+        Stock: <input name="stock"><br>
+        Skin Types (comma): <input name="skin_types"><br>
+        Concerns (comma): <input name="concerns"><br>
+        Brand: <input name="brand"><br>
+        Volume: <input name="volume"><br>
+        Image: <input type="file" name="image"><br>
+        Ingredients: <textarea name="ingredients"></textarea><br>
+        Description: <textarea name="description"></textarea><br>
+        <button type="submit">Save</button>
+    </form>
+    """
+
+
+@app.post("/admin/new")
+def create_product(
+    sku: str = Form(...),
+    name: str = Form(...),
+    category: str = Form(...),
+    price: float = Form(...),
+    stock: int = Form(...),
+    skin_types: str = Form(...),
+    concerns: str = Form(...),
+    brand: str = Form(...),
+    volume: str = Form(...),
+    ingredients: str = Form(...),
+    description: str = Form(...),
+    image: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    filename = save_image(image)
+
+    product = Product(
+        sku=sku,
+        name=name,
+        category=category,
+        price=price,
+        stock=stock,
+        skin_types=skin_types,
+        concerns=concerns,
+        brand=brand,
+        volume=volume,
+        ingredients=ingredients,
+        description=description,
+        image_filename=filename
+    )
+    db.add(product)
+    db.commit()
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.get("/admin/edit/{product_id}", response_class=HTMLResponse)
+def edit_product_form(product_id: int, db: Session = Depends(get_db)):
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        return "Not found"
+
+    return f"""
+    <h2>Edit Product</h2>
+    <form method="post" action="/admin/edit/{p.id}" enctype="multipart/form-data">
+        SKU: <input name="sku" value="{p.sku}"><br>
+        Name: <input name="name" value="{p.name}"><br>
+        Category: <input name="category" value="{p.category}"><br>
+        Price: <input name="price" value="{p.price}"><br>
+        Stock: <input name="stock" value="{p.stock}"><br>
+        Skin Types: <input name="skin_types" value="{p.skin_types}"><br>
+        Concerns: <input name="concerns" value="{p.concerns}"><br>
+        Brand: <input name="brand" value="{p.brand}"><br>
+        Volume: <input name="volume" value="{p.volume}"><br>
+        Current Image:<br>
+        <img src='/images/{p.image_filename}' width='120'><br>
+        Replace Image: <input type="file" name="image"><br>
+        Ingredients: <textarea name="ingredients">{p.ingredients}</textarea><br>
+        Description: <textarea name="description">{p.description}</textarea><br>
+        <button type="submit">Update</button>
+    </form>
+    """
+
+
+@app.post("/admin/edit/{product_id}")
+def update_product(
+    product_id: int,
+    sku: str = Form(...),
+    name: str = Form(...),
+    category: str = Form(...),
+    price: float = Form(...),
+    stock: int = Form(...),
+    skin_types: str = Form(...),
+    concerns: str = Form(...),
+    brand: str = Form(...),
+    volume: str = Form(...),
+    ingredients: str = Form(...),
+    description: str = Form(...),
+    image: UploadFile = File(None),
+    db: Session = Depends(get_db)
+):
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        raise HTTPException(status_code=404)
+
+    if image and image.filename:
+        filename = save_image(image)
+        p.image_filename = filename
+
+    p.sku = sku
+    p.name = name
+    p.category = category
+    p.price = price
+    p.stock = stock
+    p.skin_types = skin_types
+    p.concerns = concerns
+    p.brand = brand
+    p.volume = volume
+    p.ingredients = ingredients
+    p.description = description
+
+    db.commit()
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.get("/admin/delete/{product_id}")
+def delete_product(product_id: int, db: Session = Depends(get_db)):
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if p:
+        db.delete(p)
+        db.commit()
+    return RedirectResponse("/admin", status_code=303)
+
+
+# ------------------
+# Get Products by IDs (for chat memory / order sync)
+# Example: /api/products/by-ids?ids=1,3,7
+# ------------------
+@app.get("/api/products/by-ids")
+def get_products_by_ids(ids: str, db: Session = Depends(get_db)):
+    # Parse comma-separated IDs
+    try:
+        id_list = [int(i.strip()) for i in ids.split(",") if i.strip().isdigit()]
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid IDs format")
+
+    if not id_list:
+        return []
+
+    products = (
+        db.query(Product)
+        .filter(Product.id.in_(id_list))
+        .all()
+    )
+
+    return products
+
+
+# ------------------
+# Get all unique categories
+# ------------------
+@app.get("/api/categories")
+def get_categories(db: Session = Depends(get_db)):
+    """Return all unique categories from the products table."""
+    
+    # Get all distinct categories
+    categories = db.query(Product.category).distinct().all()
+    
+    # Extract category strings and remove None values
+    category_list = [
+        cat[0] 
+        for cat in categories 
+        if cat[0]
+    ]
+    
+    # Sort alphabetically
+    category_list = sorted(category_list)
+    
+    return {
+        "count": len(category_list),
+        "categories": category_list
+    }
+
+
+# ------------------
+# Get all unique skin types
+# ------------------
+@app.get("/api/skin-types")
+def get_skin_types(db: Session = Depends(get_db)):
+    """
+    Return all unique skin types from the products table.
+    Skin types are stored as comma-separated values, so we parse and deduplicate them.
+    """
+    
+    # Get all skin_types entries
+    all_entries = db.query(Product.skin_types).all()
+    
+    # Parse comma-separated values and collect unique skin types
+    skin_types_set = set()
+    for entry in all_entries:
+        if entry[0]:
+            # Split by comma, strip whitespace, and add to set
+            types = [
+                st.strip() 
+                for st in entry[0].split(",") 
+                if st.strip()
+            ]
+            skin_types_set.update(types)
+    
+    # Convert to sorted list
+    skin_types_list = sorted(list(skin_types_set))
+    
+    return {
+        "count": len(skin_types_list),
+        "skin_types": skin_types_list
+    }
+
+
+
+
+# ------------------
+# Helper: Save Image
+# ------------------
+def save_image(file: UploadFile):
+    ext = os.path.splitext(file.filename)[1]
+    filename = f"{int(time.time())}_{file.filename}"
+    filepath = os.path.join("product_images", filename)
+    with open(filepath, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    return filename
 
 
 # ============================================================
