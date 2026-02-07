@@ -220,7 +220,7 @@ async def handle_message_with_streaming(
         response = requests.post(config.NVIDIA_INVOKE_URL, headers=headers, json=payload)
 
         if response.status_code != 200:
-            await websocket.send_text(f"Error: API returned {response.status_code}")
+            await websocket.send_text(f"Error: API returned {response.status_code}. Try again...")
             await websocket.send_text("__END__")
             return
 
@@ -238,7 +238,7 @@ async def handle_message_with_streaming(
             # Stream character by character
             for char in final_text:
                 await websocket.send_text(char)
-                await asyncio.sleep(0.02)  # 10ms per char = ~100 chars/sec
+                await asyncio.sleep(0.01)  # 10ms per char = ~100 chars/sec
 
             await websocket.send_text("__END__")  # Signal end
 

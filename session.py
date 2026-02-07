@@ -251,10 +251,36 @@ class Session:
 
     def _build_system_prompt(self) -> str:
         """
-        Build the system prompt with live session state injected.
+        Build the system prompt with live session state AND vocabulary injected.
         """
         from config import SYSTEM_PROMPT_TEMPLATE
 
+        # Get vocabulary (cached)
+        # Import here to avoid circular dependency
+        from database import SessionLocal
+        db = SessionLocal()
+        try:
+            from functions import get_vocabulary
+            vocab = get_vocabulary(db)
+        finally:
+            db.close()
+
+        # Format vocabulary for prompt
+        skin_types_str = ", ".join(vocab["skin_types"])
+
+        # Show sample of concerns (first 15) to keep prompt compact
+        concerns_sample = vocab["concerns"][:15]
+        concerns_str = ", ".join(concerns_sample)
+        if len(vocab["concerns"]) > 15:
+            concerns_str += f", ... ({len(vocab['concerns']) - 15} more)"
+
+        # Show sample of categories (first 10)
+        categories_sample = vocab["categories"][:10]
+        categories_str = ", ".join(categories_sample)
+        if len(vocab["categories"]) > 10:
+            categories_str += f", ... ({len(vocab['categories']) - 10} more)"
+
+        # Get session context
         context_dict = self.to_context_dict()
 
         # Format context nicely for the model to read
@@ -270,7 +296,12 @@ Current cart:
 {json.dumps(context_dict['cart'], indent=2) if context_dict['cart'] else "  (empty)"}
 """
 
-        return SYSTEM_PROMPT_TEMPLATE.format(context=context_str.strip())
+        return SYSTEM_PROMPT_TEMPLATE.format(
+            skin_types=skin_types_str,
+            concerns=concerns_str,
+            categories=categories_str,
+            context=context_str.strip()
+        )
 
     # ── Serialization for system prompt ──────────────────────
 
