@@ -54,7 +54,7 @@ class OrderItem(Base):
 
     id         = Column(Integer, primary_key=True, index=True)
     order_id   = Column(String, ForeignKey("orders.id"), nullable=False, index=True)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    product_sku = Column(String, ForeignKey("products.sku"), nullable=False)
     quantity   = Column(Integer, default=1)
     price      = Column(Float, nullable=False)                # snapshot price at time of order
 

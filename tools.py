@@ -248,10 +248,11 @@ TOOLS = [
         "function": {
             "name": "updateUserProfile",
             "description": (
-                "Update user profile with skin type and/or skincare concerns. "
+                "Only update user profile with skin type and/or skincare concerns if the user explicitly states a skin type and/or skincare concerns."
                 "Use this when the user specifies their skin type or tells you about their skin concerns. "
                 "Skin types should be one of: All Skin Types, Combination, Dry, Normal, Oily, Sensitive. "
                 "Concerns should be specific issues like acne, anti-aging, dryness, brightening, etc."
+                "Be aware of user messages for skin types and concerns."
             ),
             "parameters": {
                 "type": "object",
@@ -295,17 +296,18 @@ TOOLS = [
             "name": "addToCart",
             "description": (
                 "Add a product to the user's cart. "
-                "Resolve references first. If the user says 'add that one' or 'add the first one', "
-                "look at lastShownProducts in the system prompt context to find the correct productId. "
-                "Only use productIds you can see in the context — never guess. "
+                "Resolve references first. Use last chat messages to resolve sku intelligently."
+                "look at previous chat history to find the correct sku of the product user is telling."
+                "Only use sku you can see in the context — never guess. If you are not sure, ask back to user."
                 "If you are sure, don't ask back to user."
+                "You must call multiple times if there are many products or a set of products. Be precise in sku."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "productId": {
-                        "type": "integer",
-                        "description": "The product ID from lastShownProducts or search results"
+                    "sku": {
+                        "type": "string",
+                        "description": "The product sku (user is willing to order or add to cart) from last messages."
                     },
                     "quantity": {
                         "type": "integer",
@@ -313,7 +315,7 @@ TOOLS = [
                         "default": 1
                     }
                 },
-                "required": ["productId"]
+                "required": ["sku"]
             }
         }
     },
@@ -322,19 +324,20 @@ TOOLS = [
         "function": {
             "name": "removeFromCart",
             "description": (
-                "Remove a product from the cart. "
+                "Remove a product from the cart."
                 "If the user says 'remove item 2' or 'remove the cleanser', "
                 "resolve the reference using the cart contents (call getCartState first if needed)."
+                "If you are not sure ask back to user."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "productId": {
-                        "type": "integer",
-                        "description": "The product ID to remove"
+                    "sku": {
+                        "type": "string",
+                        "description": "The product sku to remove"
                     }
                 },
-                "required": ["productId"]
+                "required": ["sku"]
             }
         }
     },
@@ -342,20 +345,28 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "updateCartItem",
-            "description": "Update the quantity of an item already in the cart.",
+            "description": (
+                "Resolve references first. Use last chat messages to resolve sku intelligently."
+                "Update the quantity of an item already in the cart."
+                "Use this when updating existing items in the cart, don't confuse with addToCart function."
+                "Call this intelligently using chat messages."
+                "Only use sku you can see in the context — never guess. If you are not sure, ask back to user."
+                "If you are sure, don't ask back to user."
+                "You must call multiple times if there are many products or a set of products. Be precise in sku."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "productId": {
-                        "type": "integer",
-                        "description": "The product ID to update"
+                    "sku": {
+                        "type": "string",
+                        "description": "The product sku to update"
                     },
                     "quantity": {
                         "type": "integer",
                         "description": "The new quantity. Use 0 to remove."
                     }
                 },
-                "required": ["productId", "quantity"]
+                "required": ["sku", "quantity"]
             }
         }
     },

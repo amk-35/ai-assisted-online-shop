@@ -302,6 +302,7 @@ User profile:
 Current cart:
 {json.dumps(context_dict['cart'], indent=2) if context_dict['cart'] else "  (empty)"}
 """
+        print((context_dict['cart']))
 
         return SYSTEM_PROMPT_TEMPLATE.format(
             totalItemsCount=self.totalItemCount,

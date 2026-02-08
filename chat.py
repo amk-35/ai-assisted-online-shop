@@ -35,7 +35,7 @@ from config import (
 )
 from tools import TOOLS
 from functions import FUNCTION_REGISTRY, finalizeOrder
-from session import Session, ShownProduct
+from session import Session
 
 
 # ============================================================
@@ -51,9 +51,6 @@ def build_system_prompt(session: Session) -> str:
 
     # Format context nicely for the model to read
     context_str = f"""
-Last shown products:
-{json.dumps(context_dict['lastShownProducts'], indent=2) if context_dict['lastShownProducts'] else "  (none)"}
-
 User profile:
   Skin type: {context_dict['userProfile']['skinType'] or '(not set)'}
   Concerns: {', '.join(context_dict['userProfile']['concerns']) if context_dict['userProfile']['concerns'] else '(none)'}

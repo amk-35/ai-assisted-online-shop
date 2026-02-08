@@ -12,7 +12,7 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session as DBSession
 from sqlalchemy import or_, and_, func, distinct
 from models import Product, Order, OrderItem
-from session import Session, ShownProduct, SearchContext
+from session import Session, SearchContext
 from datetime import datetime, timedelta
 import json
 
@@ -583,7 +583,7 @@ def getCartState(session: Session, db: DBSession) -> dict:
         "total": session.get_cart_total(),
         "items": [
             {
-                "productId": item.product_id,
+                "sku": item.sku,
                 "name": item.name,
                 "quantity": item.quantity,
                 "price": item.price,
@@ -597,16 +597,16 @@ def getCartState(session: Session, db: DBSession) -> dict:
 def addToCart(
         session: Session,
         db: DBSession,
-        productId: int,
+        sku: str,
         quantity: int = 1
 ) -> dict:
     """Add a product to cart."""
-    product = db.query(Product).filter(Product.id == productId).first()
+    product = db.query(Product).filter(Product.sku==sku).first()
 
     if not product:
         return {
             "success": False,
-            "message": f"Product with ID {productId} not found."
+            "message": f"Product with sku {sku} not found."
         }
 
     if product.stock < quantity:
@@ -616,7 +616,7 @@ def addToCart(
         }
 
     session.add_to_cart(
-        product_id=product.id,
+        sku=product.sku,
         quantity=quantity,
         name=product.name,
         price=product.price
@@ -630,16 +630,16 @@ def addToCart(
     }
 
 
-def removeFromCart(session: Session, db: DBSession, productId: int) -> dict:
+def removeFromCart(session: Session, db: DBSession, sku: str) -> dict:
     """Remove a product from cart."""
-    if productId not in session.cart:
+    if sku not in session.cart:
         return {
             "success": False,
             "message": "That product is not in your cart."
         }
 
-    item_name = session.cart[productId].name
-    session.remove_from_cart(productId)
+    item_name = session.cart[sku].name
+    session.remove_from_cart(sku)
 
     return {
         "success": True,
@@ -652,27 +652,27 @@ def removeFromCart(session: Session, db: DBSession, productId: int) -> dict:
 def updateCartItem(
         session: Session,
         db: DBSession,
-        productId: int,
+        sku: str,
         quantity: int
 ) -> dict:
     """Update quantity of cart item."""
-    if productId not in session.cart:
+    if sku not in session.cart:
         return {
             "success": False,
             "message": "That product is not in your cart."
         }
 
     if quantity == 0:
-        return removeFromCart(session, db, productId)
+        return removeFromCart(session, db, sku)
 
-    product = db.query(Product).filter(Product.id == productId).first()
+    product = db.query(Product).filter(Product.sku == sku).first()
     if product and product.stock < quantity:
         return {
             "success": False,
             "message": f"Only {product.stock} units available."
         }
 
-    session.update_cart_item(productId, quantity)
+    session.update_cart_item(sku, quantity)
 
     return {
         "success": True,
@@ -742,7 +742,7 @@ def finalizeOrder(
     for item in items:
         order_item = OrderItem(
             order_id=order.id,
-            product_id=item.product_id,
+            product_sku=item.sku,
             quantity=item.quantity,
             price=item.price
         )
@@ -751,7 +751,7 @@ def finalizeOrder(
     db.commit()
 
     session.clear_cart()
-    session.clear_last_shown()
+    # session.clear_last_shown()
 
     return {
         "success": True,
@@ -932,9 +932,9 @@ def findProductsByBrand(
 # ============================================================
 
 FUNCTION_REGISTRY = {
-    "getSkincareKnowledge": getSkincareKnowledge,
-    "searchProducts": searchProducts,
-    "searchMoreProducts": searchMoreProducts,
+    # "getSkincareKnowledge": getSkincareKnowledge,
+    # "searchProducts": searchProducts,
+    # "searchMoreProducts": searchMoreProducts,
     # "getCategories": getCategories,
     # "getConcerns": getConcerns,
     # "getSkinTypes": getSkinTypes,
