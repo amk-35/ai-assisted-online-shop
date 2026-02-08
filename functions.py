@@ -730,6 +730,20 @@ def finalizeOrder(
             "message": "Cart is empty. Cannot place order."
         }
 
+    # ── Validate stock for all items before creating order ──
+    for item in items:
+        product = db.query(Product).filter(Product.sku == item.sku).first()
+        if not product:
+            return {
+                "success": False,
+                "message": f"Product {item.sku} no longer exists in store."
+            }
+        if product.stock < item.quantity:
+            return {
+                "success": False,
+                "message": f"Sorry, only {product.stock} units of '{product.name}' available (you need {item.quantity}). Please update your cart."
+            }
+
     order = Order(
         customer_name=customer_name,
         phone=phone,
@@ -747,6 +761,11 @@ def finalizeOrder(
             price=item.price
         )
         db.add(order_item)
+        
+        # ── Decrease stock for this product ──
+        product = db.query(Product).filter(Product.sku == item.sku).first()
+        if product:
+            product.stock -= item.quantity
 
     db.commit()
 

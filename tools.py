@@ -278,10 +278,11 @@ TOOLS = [
         "function": {
             "name": "getCartState",
             "description": (
-                "Get the user's current cart contents. "
-                "Call this when: the user asks to see their cart, "
-                "before placing an order, or when you need to know what's in the cart "
-                "to respond accurately."
+                "Get the user's current cart contents including items, quantities, prices, and total. "
+                "REQUIRED BEFORE: updateCartItem, removeFromCart, initiateOrder. "
+                "Call this when: user asks 'show my cart', before any quantity change, "
+                "before checkout, or when resolving ambiguous references like 'remove item 2'. "
+                "Never assume cart contents — always call this when in doubt."
             ),
             "parameters": {
                 "type": "object",
@@ -295,12 +296,12 @@ TOOLS = [
         "function": {
             "name": "addToCart",
             "description": (
-                "Add a product to the user's cart. "
-                "Resolve references first. Use last chat messages to resolve sku intelligently."
-                "look at previous chat history to find the correct sku of the product user is telling."
-                "Only use sku you can see in the context — never guess. If you are not sure, ask back to user."
-                "If you are sure, don't ask back to user."
-                "You must call multiple times if there are many products or a set of products. Be precise in sku."
+                "Add a product to the user's cart. WORKFLOW: (1) Call getProductDetailsBySKU(sku) first to verify product exists, "
+                "(2) Call addToCart(sku, quantity). Use SKU from chat context or previous tool calls — never guess. "
+                "Extract SKU from product recommendations, search results, or user messages. "
+                "If SKU is unclear, ask the user first. Quantity defaults to 1 if not specified. "
+                "If adding multiple products, call this multiple times, once per product. "
+                "Confirm the addition to user with product name, price, and quantity."
             ),
             "parameters": {
                 "type": "object",
@@ -324,10 +325,10 @@ TOOLS = [
         "function": {
             "name": "removeFromCart",
             "description": (
-                "Remove a product from the cart."
-                "If the user says 'remove item 2' or 'remove the cleanser', "
-                "resolve the reference using the cart contents (call getCartState first if needed)."
-                "If you are not sure ask back to user."
+                "Remove a product completely from the cart. WORKFLOW: (1) Call getCartState first if the reference is ambiguous (e.g., 'item 2' or 'the serum'), "
+                "(2) Call removeFromCart(sku). OR use updateCartItem(sku, 0) to remove. "
+                "If user says 'remove the cleanser' and there are multiple cleansers in cart, ask which one. "
+                "Confirm removal to user with product name."
             ),
             "parameters": {
                 "type": "object",
@@ -346,13 +347,12 @@ TOOLS = [
         "function": {
             "name": "updateCartItem",
             "description": (
-                "Resolve references first. Use last chat messages to resolve sku intelligently."
-                "Update the quantity of an item already in the cart."
-                "Use this when updating existing items in the cart, don't confuse with addToCart function."
-                "Call this intelligently using chat messages."
-                "Only use sku you can see in the context — never guess. If you are not sure, ask back to user."
-                "If you are sure, don't ask back to user."
-                "You must call multiple times if there are many products or a set of products. Be precise in sku."
+                "Update the quantity of an item already in the cart. WORKFLOW: (1) Call getCartState first to see current cart, "
+                "(2) Call updateCartItem(sku, newQuantity). Use quantity=0 to remove an item. "
+                "Use this to CHANGE quantity of existing items, NOT to add new items (use addToCart for that). "
+                "Extract SKU from getCartState response or chat context — never guess. "
+                "If multiple items match the description, ask user which one. "
+                "Confirm the update to user with new quantity and total price."
             ),
             "parameters": {
                 "type": "object",
@@ -377,10 +377,11 @@ TOOLS = [
         "function": {
             "name": "initiateOrder",
             "description": (
-                "Start the order process. Call this when the user says they want to place an order "
-                "or checkout. This does NOT place the order yet — it triggers the backend to ask "
-                "the user for name, phone number, and delivery address before finalizing. "
-                "Call getCartState first to confirm the cart is not empty."
+                "Start the order checkout process. WORKFLOW: (1) User says 'order', 'checkout', 'buy', etc., "
+                "(2) Call getCartState to confirm cart is NOT empty, (3) Call initiateOrder() with no parameters. "
+                "This triggers the backend to ask for customer name, phone number, and delivery address. "
+                "DO NOT place order until user confirms they're ready. This is just the FIRST step of checkout. "
+                "Backend will handle the rest and return an order ID on completion."
             ),
             "parameters": {
                 "type": "object",
@@ -394,8 +395,10 @@ TOOLS = [
         "function": {
             "name": "getOrderInfo",
             "description": (
-                "Look up a past order by its order ID. Use this when the user asks about "
-                "an order status or types an order ID. Order IDs are 8-character uppercase strings."
+                "Look up a past order by its order ID. Call this when the user asks about order status, "
+                "'where is my order?', or provides an order ID (8-character uppercase string like 'A1B2C3D4'). "
+                "Returns order details including status, items, customer info, and timestamps. "
+                "Confirm the order ID with user if unclear."
             ),
             "parameters": {
                 "type": "object",

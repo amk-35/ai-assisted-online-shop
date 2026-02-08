@@ -279,9 +279,9 @@ async def handle_checkout_flow(
 
 """
     for item in cart_summary["cartSummary"]["items"]:
-        summary_message += f"  • {item['quantity']}x {item['name']} - ${item['price']:.2f}\n"
+        summary_message += f"  • {item['quantity']}x {item['name']} - MMK {item['price']:.2f}\n"
 
-    summary_message += f"\n**Total: ${cart_summary['cartSummary']['total']:.2f}**\n\n"
+    summary_message += f"\n**Total: MMK {cart_summary['cartSummary']['total']:.2f}**\n\n"
     summary_message += "To complete your order, please provide:\n"
     summary_message += "1. Your full name\n"
     summary_message += "2. Phone number\n"
@@ -289,10 +289,7 @@ async def handle_checkout_flow(
     summary_message += "You can send them in one message like:\n"
     summary_message += "`Name: John Doe, Phone: 09123456789, Address: 123 Main St`"
 
-    await websocket.send_json({
-        "type": "message",
-        "content": summary_message
-    })
+    await websocket.send_text(summary_message)
 
     # ── Step 2: Wait for user's response ──
     # This is handled by the websocket endpoint in main.py
@@ -304,6 +301,18 @@ async def handle_checkout_flow(
 # HELPER: Parse customer info from user message
 # ============================================================
 
+def validate_phone(phone: str) -> bool:
+    """
+    Validate phone number format.
+    Must start with 09 and have exactly 11 digits total.
+    """
+    import re
+    # Remove spaces/dashes if any
+    phone = phone.replace(" ", "").replace("-", "")
+    # Check: starts with 09 and exactly 11 digits
+    return bool(re.match(r"^09\d{9}$", phone))
+
+
 def parse_customer_info(message: str) -> Optional[Dict[str, str]]:
     """
     Parse customer info from a message.
@@ -314,7 +323,7 @@ def parse_customer_info(message: str) -> Optional[Dict[str, str]]:
       - etc.
 
     Returns dict with keys: name, phone, address
-    or None if parsing fails.
+    or None if parsing fails or phone is invalid.
     """
     import re
 
@@ -322,18 +331,24 @@ def parse_customer_info(message: str) -> Optional[Dict[str, str]]:
     pattern1 = r"name:\s*(.+?),\s*phone:\s*(.+?),\s*address:\s*(.+)"
     match = re.search(pattern1, message, re.IGNORECASE)
     if match:
+        phone = match.group(2).strip()
+        if not validate_phone(phone):
+            return None  # Invalid phone format
         return {
             "name": match.group(1).strip(),
-            "phone": match.group(2).strip(),
+            "phone": phone,
             "address": match.group(3).strip()
         }
 
     # Try simple comma-separated (Name, Phone, Address)
     parts = [p.strip() for p in message.split(",")]
     if len(parts) >= 3:
+        phone = parts[1]
+        if not validate_phone(phone):
+            return None  # Invalid phone format
         return {
             "name": parts[0],
-            "phone": parts[1],
+            "phone": phone,
             "address": ", ".join(parts[2:])  # Rest is address
         }
 
@@ -349,9 +364,10 @@ async def complete_checkout(
         session: Session,
         db: DBSession,
         websocket: WebSocket
-) -> None:
+) -> str:
     """
     Finalize the order with customer info.
+    Returns the confirmation message text.
     """
     result = finalizeOrder(
         session=session,
@@ -378,10 +394,9 @@ We'll contact you at {customer_info['phone']} for delivery updates.
     else:
         confirmation = f"❌ Order failed: {result['message']}"
 
-    await websocket.send_json({
-        "type": "message",
-        "content": confirmation
-    })
+    await websocket.send_text(confirmation)
 
     # Clear the checkout flag
     session.awaiting_checkout = False
+    
+    return confirmation

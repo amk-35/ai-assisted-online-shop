@@ -108,59 +108,101 @@ async def websocket_chat(websocket: WebSocket, db: DBSession = Depends(get_db)):
     5. Stream response back character-by-character
     6. On disconnect, destroy Session
     """
-    await websocket.accept()
+    try:
+        await websocket.accept()
+    except Exception as e:
+        print(f"❌ Failed to accept websocket: {e}")
+        import traceback
+        traceback.print_exc()
+        return
 
     # ── Create session ──
     connection_id = str(uuid.uuid4())
     session = create_session(connection_id)
 
     print(f"✅ WebSocket connected: {connection_id}")
+    print(f"   📊 Session created, cart initialized")
 
     try:
         while True:
-            # ── Wait for user message ──
-            user_message = await websocket.receive_text()
+            try:
+                # ── Wait for user message ──
+                user_message = await websocket.receive_text()
+                print(f"📩 [{connection_id}] User: {user_message}")
 
-            print(f"📩 [{connection_id}] User: {user_message}")
+            except Exception as e:
+                print(f"❌ [{connection_id}] Error receiving message: {e}")
+                import traceback
+                traceback.print_exc()
+                break
 
             # ── Check if we're in checkout flow ──
             if session.awaiting_checkout:
-                # Parse customer info
-                customer_info = parse_customer_info(user_message)
+                print(f"🛒 [{connection_id}] In checkout flow, parsing customer info...")
+                try:
+                    # Parse customer info
+                    customer_info = parse_customer_info(user_message)
 
-                if customer_info:
-                    # Valid info → complete the order
-                    await complete_checkout(customer_info, session, db, websocket)
-                    # Save to history
-                    session.add_to_history("user", user_message)
-                    session.add_to_history("assistant", f"Order placed for {customer_info['name']}")
-                else:
-                    # Invalid format → ask again
-                    response_text = (
-                        "I couldn't parse that. Please send your details like this:\n"
-                        "Name: John Doe, Phone: 09123456789, Address: 123 Main St"
-                    )
-                    await websocket.send_text(response_text)
+                    if customer_info:
+                        print(f"✅ [{connection_id}] Customer info valid: {customer_info['name']}")
+                        # Valid info → complete the order
+                        responded_text= await complete_checkout(customer_info, session, db, websocket)
+                        await websocket.send_text("__END__")
+                        # Save to history
+                        session.add_to_history("user", user_message)
+                        session.add_to_history("assistant", responded_text)
+                    else:
+                        print(f"❌ [{connection_id}] Customer info validation failed")
+                        # Invalid format or invalid phone → ask again
+                        response_text = (
+                            "❌ Invalid format. Please check:\n"
+                            "• Name: Your full name\n"
+                            "• Phone: Must start with 09 and have exactly 11 digits (e.g., 09123456789)\n"
+                            "• Address: Your delivery address\n\n"
+                            "Example: Name: John Doe, Phone: 09123456789, Address: 123 Main St"
+                        )
+                        await websocket.send_text(response_text)
+                        await websocket.send_text("__END__")
+                        # Save to history
+                        session.add_to_history("user", user_message)
+                        session.add_to_history("assistant", response_text)
+                except Exception as e:
+                    print(f"❌ [{connection_id}] Error in checkout flow: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    await websocket.send_text("Error processing checkout. Please try again.")
                     await websocket.send_text("__END__")
-                    # Save to history
-                    session.add_to_history("user", user_message)
-                    session.add_to_history("assistant", response_text)
 
             else:
-                # ── Normal flow: handle message through agentic loop ──
-                await handle_message_with_streaming(
-                    user_message=user_message,
-                    session=session,
-                    db=db,
-                    websocket=websocket
-                )
+                print(f"💬 [{connection_id}] Normal message flow, calling handle_message_with_streaming...")
+                try:
+                    # ── Normal flow: handle message through agentic loop ──
+                    await handle_message_with_streaming(
+                        user_message=user_message,
+                        session=session,
+                        db=db,
+                        websocket=websocket
+                    )
+                    print(f"✅ [{connection_id}] Message processed successfully")
+                except Exception as e:
+                    print(f"❌ [{connection_id}] Error in handle_message_with_streaming: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    try:
+                        await websocket.send_text(f"Error processing message: {str(e)}")
+                        await websocket.send_text("__END__")
+                    except:
+                        pass
 
     except WebSocketDisconnect:
-        print(f"❌ WebSocket disconnected: {connection_id}")
+        print(f"⚠️  [{connection_id}] WebSocket disconnected by client")
         destroy_session(connection_id)
 
     except Exception as e:
-        print(f"❌ Error in websocket {connection_id}: {e}")
+        print(f"❌ FATAL ERROR in websocket {connection_id}: {e}")
+        print(f"   Exception type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
         destroy_session(connection_id)
         raise
 
@@ -242,12 +284,24 @@ async def handle_message_with_streaming(
             # ── No tool calls → final response, STREAM it ──
             final_text = assistant_message.get("content", "")
 
-            # Stream character by character
-            for char in final_text:
-                await websocket.send_text(char)
-                await asyncio.sleep(0.01)  # 10ms per char = ~100 chars/sec
+            # Stream in chunks (optimized for concurrent sessions)
+            # Larger chunks + longer delays = less server load with many concurrent users
+            chunk_size = 150  # 150 chars per chunk (increased from 50)
+            chunk_delay = 0.075  # 75ms between chunks (increased from 20ms)
+            
+            for i in range(0, len(final_text), chunk_size):
+                chunk = final_text[i:i + chunk_size]
+                try:
+                    await websocket.send_text(chunk)
+                    await asyncio.sleep(chunk_delay)  # Delay between chunks
+                except Exception as e:
+                    print(f"⚠️  [{session.connection_id}] Failed to send chunk: {e}")
+                    return  # Client disconnected, exit gracefully
 
-            await websocket.send_text("__END__")  # Signal end
+            try:
+                await websocket.send_text("__END__")  # Signal end
+            except Exception as e:
+                print(f"⚠️  [{session.connection_id}] Failed to send END signal: {e}")
 
             # ── Save to conversation history ──
             session.add_to_history("user", user_message)
