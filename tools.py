@@ -165,7 +165,7 @@ TOOLS = [
     #             "Don't use brand names that are not in our store.Don't call this function when user give a brand name that is not from our store, instead say brand not available. "
     #             "Returns products organized by brand name with their SKUs, prices, and availability."
     #             "Use when needed."
-    #             "Give the response to user with the the same output as this function."
+    #             "Give the response to user with the same output as this function."
     #         ),
     #         "parameters": {
     #             "type": "object",
@@ -206,9 +206,9 @@ TOOLS = [
         "function": {
             "name": "getProductDetailsBySKU",
             "description": (
-                "Get full details for one specific product by its SKU code: ingredients, price, stock, description. "
-                "Use this when the user asks for product details and provides a SKU code. "
-                "Reference the chat to get SKU. "
+                "Get full details for one specific product by its SKU code to obtain ingredients, price, stock, description. "
+                "Use this when the user asks for product details "
+                "Reference the chat to get SKU."
                 "Returns comprehensive product information including ingredients, pricing, and availability."
             ),
             "parameters": {
@@ -216,10 +216,57 @@ TOOLS = [
                 "properties": {
                     "sku": {
                         "type": "string",
-                        "description": "The product SKU code to search for. e.g. 'SKU-001', 'PROD-123'"
+                        "description": "The product SKU code to search for. e.g. 'SKU-001', 'PROD-123', 'TO-CL-001'"
                     }
                 },
                 "required": ["sku"]
+            }
+        }
+    },
+
+    # ── Inventory Metadata ────────────────────────────────
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "getTotalProductsCount",
+    #         "description": (
+    #             "Get the total count of all products available in the store. "
+    #             "Use this when the user wants to know how many products are available. "
+    #             "Returns the total number of items in the product catalog."
+    #         ),
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {},
+    #             "required": []
+    #         }
+    #     }
+    # },
+
+    # ── Profile Management ────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "updateUserProfile",
+            "description": (
+                "Update user profile with skin type and/or skincare concerns. "
+                "Use this when the user specifies their skin type or tells you about their skin concerns. "
+                "Skin types should be one of: All Skin Types, Combination, Dry, Normal, Oily, Sensitive. "
+                "Concerns should be specific issues like acne, anti-aging, dryness, brightening, etc."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skinType": {
+                        "type": "string",
+                        "description": "The user's skin type. e.g. 'Oily', 'Dry', 'Combination', 'Sensitive', 'Normal', 'All Skin Types'"
+                    },
+                    "concerns": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of skincare concerns. e.g. ['acne', 'anti-aging', 'dryness', 'brightening']"
+                    }
+                },
+                "required": []
             }
         }
     },

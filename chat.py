@@ -31,8 +31,6 @@ from config import (
     TEMPERATURE,
     MAX_TOKENS,
     TOP_P,
-    FREQUENCY_PENALTY,
-    PRESENCE_PENALTY,
     SYSTEM_PROMPT_TEMPLATE
 )
 from tools import TOOLS

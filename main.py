@@ -194,33 +194,40 @@ async def handle_message_with_streaming(
     messages = session.get_messages_for_api(user_message)
 
     # ── Agentic loop ──
-    max_iterations = 10
+    max_iterations = 20
     iteration = 0
 
     while iteration < max_iterations:
         iteration += 1
 
+        # ── Get active model configuration ──
+        model_config = config.get_model_config()
+
         # ── Call NVIDIA API ──
         headers = {
-            "Authorization": f"Bearer {config.NVIDIA_API_KEY}",
+            "Authorization": f"Bearer {model_config['api_key']}",
             "Accept": "application/json"
         }
 
         payload = {
-            "model": config.MODEL_ID,
+            "model": model_config['model_id'],
             "messages": messages,
-            "temperature": config.TEMPERATURE,
-            "max_tokens": config.MAX_TOKENS,
-            "top_p": config.TOP_P,
+            "temperature": model_config['temperature'],
+            "max_tokens": model_config['max_tokens'],
+            "top_p": model_config['top_p'],
             "tools": TOOLS,
             "tool_choice": "auto",
             "stream": False
         }
 
-        response = requests.post(config.NVIDIA_INVOKE_URL, headers=headers, json=payload)
+        # ── Add extra_body if present (e.g., for Deepseek) ──
+        if model_config['extra_body']:
+            payload["extra_body"] = model_config['extra_body']
+
+        response = requests.post(model_config['invoke_url'], headers=headers, json=payload)
 
         if response.status_code != 200:
-            await websocket.send_text(f"Error: API returned {response.status_code}. Try again...")
+            await websocket.send_text(f"Error: API returned {response}. Try again...")
             await websocket.send_text("__END__")
             return
 

@@ -20,111 +20,111 @@ import json
 # ============================================================
 # VOCABULARY CACHE
 # ============================================================
+#
+# _vocabulary_cache = None
+# _cache_timestamp = None
+# CACHE_TTL_SECONDS = 3600  # 1 hour
 
-_vocabulary_cache = None
-_cache_timestamp = None
-CACHE_TTL_SECONDS = 3600  # 1 hour
+# # Static skin types (never changes)
+# SKIN_TYPES = [
+#     "All Skin Types",
+#     "Combination",
+#     "Dry",
+#     "Normal",
+#     "Oily",
+#     "Sensitive"
+# ]
 
-# Static skin types (never changes)
-SKIN_TYPES = [
-    "All Skin Types",
-    "Combination", 
-    "Dry",
-    "Normal",
-    "Oily",
-    "Sensitive"
-]
+#
+# def get_vocabulary(db: DBSession, force_refresh: bool = False) -> Dict[str, List[str]]:
+#     """
+#     Get all distinct categories and concerns from DB.
+#     Cached for 1 hour.
+#     Skin types are static (hardcoded).
+#     """
+#     global _vocabulary_cache, _cache_timestamp
+#
+#     now = datetime.now()
+#
+#     # Check cache
+#     if not force_refresh and _vocabulary_cache is not None:
+#         if (now - _cache_timestamp).total_seconds() < CACHE_TTL_SECONDS:
+#             return _vocabulary_cache
+#
+#     # Fetch categories (distinct, sorted)
+#     categories_raw = db.query(distinct(Product.category))\
+#                        .filter(Product.category.isnot(None))\
+#                        .filter(Product.category != "")\
+#                        .order_by(Product.category)\
+#                        .all()
+#
+#     categories = [cat[0] for cat in categories_raw if cat[0]]
+#
+#     # Fetch and parse concerns (comma-separated)
+#     concerns_raw = db.query(Product.concerns)\
+#                      .filter(Product.concerns.isnot(None))\
+#                      .filter(Product.concerns != "")\
+#                      .all()
+#
+#     concerns_set = set()
+#     for (concerns_str,) in concerns_raw:
+#         if concerns_str:
+#             # Split by comma, strip whitespace, normalize
+#             parsed = [c.strip() for c in concerns_str.split(',') if c.strip()]
+#             concerns_set.update(parsed)
+#
+#     concerns = sorted(list(concerns_set))
+#
+#     # Update cache
+#     _vocabulary_cache = {
+#         "categories": categories,
+#         "concerns": concerns,
+#         "skin_types": SKIN_TYPES  # Static
+#     }
+#     _cache_timestamp = now
+#
+#     return _vocabulary_cache
 
-
-def get_vocabulary(db: DBSession, force_refresh: bool = False) -> Dict[str, List[str]]:
-    """
-    Get all distinct categories and concerns from DB.
-    Cached for 1 hour.
-    Skin types are static (hardcoded).
-    """
-    global _vocabulary_cache, _cache_timestamp
-    
-    now = datetime.now()
-    
-    # Check cache
-    if not force_refresh and _vocabulary_cache is not None:
-        if (now - _cache_timestamp).total_seconds() < CACHE_TTL_SECONDS:
-            return _vocabulary_cache
-    
-    # Fetch categories (distinct, sorted)
-    categories_raw = db.query(distinct(Product.category))\
-                       .filter(Product.category.isnot(None))\
-                       .filter(Product.category != "")\
-                       .order_by(Product.category)\
-                       .all()
-    
-    categories = [cat[0] for cat in categories_raw if cat[0]]
-    
-    # Fetch and parse concerns (comma-separated)
-    concerns_raw = db.query(Product.concerns)\
-                     .filter(Product.concerns.isnot(None))\
-                     .filter(Product.concerns != "")\
-                     .all()
-    
-    concerns_set = set()
-    for (concerns_str,) in concerns_raw:
-        if concerns_str:
-            # Split by comma, strip whitespace, normalize
-            parsed = [c.strip() for c in concerns_str.split(',') if c.strip()]
-            concerns_set.update(parsed)
-    
-    concerns = sorted(list(concerns_set))
-    
-    # Update cache
-    _vocabulary_cache = {
-        "categories": categories,
-        "concerns": concerns,
-        "skin_types": SKIN_TYPES  # Static
-    }
-    _cache_timestamp = now
-    
-    return _vocabulary_cache
-
-
-# ============================================================
-# SMART SKIN TYPE MATCHING
-# ============================================================
-
-def build_skin_type_filter(skin_type: str):
-    """
-    Build filter for skin type that includes "All Skin Types".
-    
-    Example:
-      User specifies: "Oily"
-      Matches: Products with "Oily" OR "All Skin Types"
-    """
-    if not skin_type:
-        return None
-    
-    # Match products with specified skin type OR "All Skin Types"
-    return or_(
-        Product.skin_types.ilike(f"%{skin_type}%"),
-        Product.skin_types.ilike("%All Skin Types%")
-    )
+#
+# # ============================================================
+# # SMART SKIN TYPE MATCHING
+# # ============================================================
+#
+# def build_skin_type_filter(skin_type: str):
+#     """
+#     Build filter for skin type that includes "All Skin Types".
+#
+#     Example:
+#       User specifies: "Oily"
+#       Matches: Products with "Oily" OR "All Skin Types"
+#     """
+#     if not skin_type:
+#         return None
+#
+#     # Match products with specified skin type OR "All Skin Types"
+#     return or_(
+#         Product.skin_types.ilike(f"%{skin_type}%"),
+#         Product.skin_types.ilike("%All Skin Types%")
+#     )
 
 
 # ============================================================
 # KNOWLEDGE
 # ============================================================
-
-def getSkincareKnowledge(
-        session: Session,
-        db: DBSession,
-        topic: str,
-        skinType: Optional[str] = None,
-        concern: Optional[str] = None
-) -> dict:
-    """The model answers using its own knowledge."""
-    return {
-        "type": "knowledge_question",
-        "topic": topic,
-        "note": "The model will answer this using its own knowledge."
-    }
+#
+# def getSkincareKnowledge(
+#         session: Session,
+#         db: DBSession,
+#         topic: str,
+#         skinType: Optional[str] = None,
+#         concern: Optional[str] = None
+# ) -> dict:
+#     """The model answers using its own knowledge."""
+#     return {
+#         "type": "knowledge_question",
+#         "topic": topic,
+#         "note": "The model will answer this using its own knowledge."
+#     }
 
 
 # ============================================================
@@ -361,51 +361,63 @@ def searchMoreProducts(session: Session, db: DBSession) -> dict:
 # ============================================================
 # INVENTORY TOOLS (for LLM context)
 # ============================================================
+#
+# def getCategories(session: Session, db: DBSession) -> dict:
+#     """Get all unique categories with counts."""
+#
+#     categories_raw = db.query(
+#         Product.category,
+#         func.count(Product.id).label('count')
+#     ).filter(
+#         Product.category.isnot(None),
+#         Product.category != ""
+#     ).group_by(Product.category)\
+#      .order_by(func.count(Product.id).desc())\
+#      .all()
+#
+#     categories = [
+#         {"name": cat, "count": count}
+#         for cat, count in categories_raw
+#     ]
+#
+#     return {
+#         "found": True,
+#         "count": len(categories),
+#         "categories": categories
+#     }
 
-def getCategories(session: Session, db: DBSession) -> dict:
-    """Get all unique categories with counts."""
+
+# def getConcerns(session: Session, db: DBSession) -> dict:
+#     """Get all unique concerns (parsed from comma-separated)."""
+#
+#     vocab = get_vocabulary(db)
+#
+#     return {
+#         "found": True,
+#         "count": len(vocab["concerns"]),
+#         "concerns": vocab["concerns"]
+#     }
+
+
+# def getSkinTypes(session: Session, db: DBSession) -> dict:
+#     """Get all skin types (static list)."""
+#
+#     return {
+#         "found": True,
+#         "count": len(SKIN_TYPES),
+#         "skinTypes": SKIN_TYPES
+#     }
+
+
+def getTotalProductsCount(session: Session, db: DBSession) -> dict:
+    """Get total count of all products in the database."""
     
-    categories_raw = db.query(
-        Product.category, 
-        func.count(Product.id).label('count')
-    ).filter(
-        Product.category.isnot(None),
-        Product.category != ""
-    ).group_by(Product.category)\
-     .order_by(func.count(Product.id).desc())\
-     .all()
-    
-    categories = [
-        {"name": cat, "count": count}
-        for cat, count in categories_raw
-    ]
+    total_count = db.query(func.count(Product.id)).scalar()
     
     return {
         "found": True,
-        "count": len(categories),
-        "categories": categories
-    }
-
-
-def getConcerns(session: Session, db: DBSession) -> dict:
-    """Get all unique concerns (parsed from comma-separated)."""
-    
-    vocab = get_vocabulary(db)
-    
-    return {
-        "found": True,
-        "count": len(vocab["concerns"]),
-        "concerns": vocab["concerns"]
-    }
-
-
-def getSkinTypes(session: Session, db: DBSession) -> dict:
-    """Get all skin types (static list)."""
-    
-    return {
-        "found": True,
-        "count": len(SKIN_TYPES),
-        "skinTypes": SKIN_TYPES
+        "totalProductsCount": total_count,
+        "message": f"Total products in store: {total_count}"
     }
 
 
@@ -547,7 +559,6 @@ def getProductDetailsBySKU(
             "ingredients": product.ingredients,
             "skinTypes": product.skin_types,
             "concerns": product.concerns,
-            "imageFilename": product.image_filename
         }
     }
 
@@ -924,9 +935,10 @@ FUNCTION_REGISTRY = {
     "getSkincareKnowledge": getSkincareKnowledge,
     "searchProducts": searchProducts,
     "searchMoreProducts": searchMoreProducts,
-    "getCategories": getCategories,
-    "getConcerns": getConcerns,
-    "getSkinTypes": getSkinTypes,
+    # "getCategories": getCategories,
+    # "getConcerns": getConcerns,
+    # "getSkinTypes": getSkinTypes,
+    "getTotalProductsCount": getTotalProductsCount,
     "updateUserProfile": updateUserProfile,
     "getUserProfile": getUserProfile,
     "getProductDetail": getProductDetail,
