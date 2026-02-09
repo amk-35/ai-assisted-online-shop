@@ -738,10 +738,16 @@ def finalizeOrder(
                 "success": False,
                 "message": f"Product {item.sku} no longer exists in store."
             }
+        if product.stock ==0:
+            session.remove_from_cart(item.sku)  # Remove out-of-stock item from cart
+            return {
+                "success": False,
+                "message": f"Sorry, '{product.name} [{product.sku}]' is out of stock and cannot be ordered.I removed this product from your cart. Please update your cart."
+            }
         if product.stock < item.quantity:
             return {
                 "success": False,
-                "message": f"Sorry, only {product.stock} units of '{product.name}' available (you need {item.quantity}). Please update your cart."
+                "message": f"Sorry, only {product.stock} units of '{product.name} [{product.sku}]' available (you need {item.quantity}). Please update your cart."
             }
 
     order = Order(

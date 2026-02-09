@@ -287,7 +287,8 @@ async def handle_checkout_flow(
     summary_message += "2. Phone number\n"
     summary_message += "3. Delivery address\n\n"
     summary_message += "You can send them in one message like:\n"
-    summary_message += "`Name: John Doe, Phone: 09123456789, Address: 123 Main St`"
+    summary_message += "`Name: John Doe, Phone: 09123456789, Address: 123 Main St` (OR)\n"
+    summary_message += "`Name, Phone, Address`"
 
     await websocket.send_text(summary_message)
 
@@ -385,7 +386,7 @@ Customer: {customer_info['name']}
 Phone: {customer_info['phone']}
 Address: {customer_info['address']}
 
-Total: ${result['orderSummary']['total']:.2f}
+Total: MMK {result['orderSummary']['total']:.2f}
 Status: {result['orderSummary']['status']}
 
 Your order has been placed successfully! Keep your Order ID for tracking.
