@@ -21,11 +21,13 @@ import uuid
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, UploadFile, HTTPException, Form, File
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session as DBSession, Session
+from pydantic import BaseModel
+from sqlalchemy import or_
+from sqlalchemy.orm import Session as DBSession, Session, joinedload
 from starlette.responses import RedirectResponse
 
 from database import get_db, init_db
-from models import Product
+from models import Product, Order, OrderItem
 from session import create_session, get_session, destroy_session
 from chat import parse_customer_info, complete_checkout
 import config
@@ -686,6 +688,301 @@ def save_image(file: UploadFile):
         shutil.copyfileobj(file.file, buffer)
     return filename
 
+
+class StatusUpdateRequest(BaseModel):
+    status: str
+
+
+# ============================================================
+# API ENDPOINTS
+# ============================================================
+
+@app.get("/api/orders")
+def get_orders(search: str = None, db: Session = Depends(get_db)):
+    query = db.query(Order).order_by(Order.created_at.desc())
+
+    if search:
+        # We now search across three columns: name, phone, OR Order ID
+        query = query.filter(
+            or_(
+                Order.customer_name.ilike(f"%{search}%"),
+                Order.phone.ilike(f"%{search}%"),
+                Order.id.ilike(f"%{search}%")  # Added this line
+            )
+        )
+
+    orders = query.all()
+    return [
+        {
+            "id": o.id,
+            "customer_name": o.customer_name,
+            "phone": o.phone,
+            "status": o.status,
+            "created_at": o.created_at.isoformat() if o.created_at else None
+        }
+        for o in orders
+    ]
+
+
+@app.get("/api/orders/{order_id}")
+def get_order_details(order_id: str, db: Session = Depends(get_db)):
+    order = db.query(Order).options(
+        joinedload(Order.items).joinedload(OrderItem.product)
+    ).filter(Order.id == order_id).first()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    items_data = []
+    total_cost = 0.0
+    for item in order.items:
+        line_total = item.price * item.quantity
+        total_cost += line_total
+        items_data.append({
+            "sku": item.product_sku,
+            "product_name": item.product.name if item.product else "Unknown",
+            "quantity": item.quantity,
+            "price": item.price,
+            "line_total": line_total
+        })
+
+    return {
+        "id": order.id,
+        "customer_name": order.customer_name,
+        "phone": order.phone,
+        "address": order.address,
+        "status": order.status,
+        "total_cost": round(total_cost, 2),
+        "items": items_data
+    }
+
+
+@app.patch("/api/orders/{order_id}/status")
+def update_order_status(order_id: str, payload: StatusUpdateRequest, db: Session = Depends(get_db)):
+    valid_statuses = ["pending", "confirmed", "shipped", "delivered", "rejected"]
+
+    if payload.status not in valid_statuses:
+        raise HTTPException(status_code=400, detail="Invalid status")
+
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # Prevent re-processing if already rejected
+    if order.status == "rejected":
+        raise HTTPException(status_code=400, detail="Order is already rejected.")
+
+    # LOGIC: If status is being changed TO rejected, restore stock
+    if payload.status == "rejected":
+        for item in order.items:
+            product = db.query(Product).filter(Product.sku == item.product_sku).first()
+            if product:
+                product.stock += item.quantity  # Increase stock back
+
+    order.status = payload.status
+    db.commit()
+
+    return {"message": "Status updated", "new_status": order.status}
+
+# ============================================================
+# HTML ADMIN UI
+# ============================================================
+
+@app.get("/admin/order", response_class=HTMLResponse)
+def admin_dashboard():
+    """Serves the simple HTML/JS UI for Admin Management."""
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Admin - Order Management</title>
+        <style>
+           .rejected { background: #e74c3c; color: #fff; } /* Red for rejected */
+            button:disabled { background: #bdc3c7; cursor: not-allowed; }
+            body { font-family: Arial, sans-serif; margin: 20px; background: #f4f4f9; color: #333; }
+            h1 { color: #2c3e50; }
+            .container { display: flex; gap: 20px; }
+            .left-panel, .right-panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            .left-panel { flex: 2; }
+            .right-panel { flex: 1; display: none; }
+            table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+            th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; }
+            th { background-color: #f8f9fa; }
+            input[type="text"] { padding: 8px; width: 300px; border: 1px solid #ccc; border-radius: 4px; }
+            button { padding: 8px 12px; cursor: pointer; background: #3498db; color: white; border: none; border-radius: 4px; }
+            button:hover { background: #2980b9; }
+            .status-badge { padding: 4px 8px; border-radius: 12px; font-size: 0.85em; font-weight: bold; text-transform: uppercase; }
+            .pending { background: #f1c40f; color: #fff; }
+            .confirmed { background: #3498db; color: #fff; }
+            .shipped { background: #9b59b6; color: #fff; }
+            .delivered { background: #2ecc71; color: #fff; }
+            select { padding: 8px; margin-right: 10px; border-radius: 4px; }
+        </style>
+    </head>
+    <body>
+
+        <h1>Order Management Dashboard</h1>
+
+        <div class="container">
+            <div class="left-panel">
+                <div>
+                    <input type="text" id="searchInput" placeholder="Search by name, phone, or Order ID..." onkeyup="if(event.key === 'Enter') fetchOrders()">
+                    <button onclick="fetchOrders()">Search</button>
+                    <button onclick="document.getElementById('searchInput').value=''; fetchOrders()" style="background:#95a5a6;">Clear</button>
+                </div>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Order ID</th>
+                            <th>Customer</th>
+                            <th>Phone</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ordersTableBody">
+                        </tbody>
+                </table>
+            </div>
+
+            <div class="right-panel" id="detailsPanel">
+                <h3>Order Details <span id="detailOrderId"></span></h3>
+    <p><strong>Name:</strong> <span id="detailName"></span></p>
+    <p><strong>Phone:</strong> <span id="detailPhone"></span></p>
+    <p><strong>Address:</strong> <span id="detailAddress"></span></p>
+    <p style="font-size: 1.1em; color: #27ae60;"><strong>Total: $<span id="detailTotal"></span></strong></p>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 15px 0;">
+
+                <div style="margin-bottom: 15px;">
+                    <label><strong>Update Status:</strong></label><br><br>
+                    <select id="statusSelect">
+    <option value="pending">Pending</option>
+    <option value="confirmed">Confirmed</option>
+    <option value="shipped">Shipped</option>
+    <option value="delivered">Delivered</option>
+    <option value="rejected">Rejected</option>
+</select>
+<button id="saveStatusBtn" onclick="updateStatus()">Save Status</button>
+                </div>
+
+                <h4>Items</h4>
+                <table style="font-size: 0.9em;">
+                    <thead>
+                        <tr>
+                            <th>Product</th>
+                            <th>Qty</th>
+                            <th>Price</th>
+                        </tr>
+                    </thead>
+                    <tbody id="itemsTableBody">
+                    </tbody>
+                </table>
+                <br>
+                <button onclick="closeDetails()" style="background:#e74c3c;">Close Details</button>
+            </div>
+        </div>
+
+        <script>
+            let currentOrderId = null;
+
+            async function fetchOrders() {
+                const search = document.getElementById('searchInput').value;
+                const url = search ? `/api/orders?search=${encodeURIComponent(search)}` : `/api/orders`;
+
+                const response = await fetch(url);
+                const orders = await response.json();
+
+                const tbody = document.getElementById('ordersTableBody');
+                tbody.innerHTML = '';
+
+                orders.forEach(order => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${order.id}</td>
+                        <td>${order.customer_name}</td>
+                        <td>${order.phone}</td>
+                        <td><span class="status-badge ${order.status}">${order.status}</span></td>
+                        <td><button onclick="viewDetails('${order.id}')">View</button></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+
+            async function viewDetails(orderId) {
+                currentOrderId = orderId;
+                const response = await fetch(`/api/orders/${orderId}`);
+                const order = await response.json();
+
+                document.getElementById('detailOrderId').textContent = `(#${order.id})`;
+                document.getElementById('detailName').textContent = order.customer_name;
+                document.getElementById('detailPhone').textContent = order.phone;
+                document.getElementById('detailAddress').textContent = order.address;
+                document.getElementById('statusSelect').value = order.status;
+                document.getElementById('detailTotal').textContent = order.total_cost.toFixed(2);
+                
+                const statusSelect = document.getElementById('statusSelect');
+    const saveBtn = document.getElementById('saveStatusBtn'); // Make sure your button has this ID
+
+    statusSelect.value = order.status;
+
+    // Logic: Disable button and select if status is 'rejected' or 'delivered'
+    if (order.status === 'rejected' || order.status === 'delivered') {
+        statusSelect.disabled = true;
+        saveBtn.disabled = true;
+    } else {
+        statusSelect.disabled = false;
+        saveBtn.disabled = false;
+    }
+
+                const tbody = document.getElementById('itemsTableBody');
+                tbody.innerHTML = '';
+
+                order.items.forEach(item => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${item.product_name}<br><small style="color:#7f8c8d;">SKU: ${item.sku}</small></td>
+                        <td>${item.quantity}</td>
+                        <td>$${item.price}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+
+                document.getElementById('detailsPanel').style.display = 'block';
+            }
+
+            async function updateStatus() {
+                if (!currentOrderId) return;
+
+                const newStatus = document.getElementById('statusSelect').value;
+                const response = await fetch(`/api/orders/${currentOrderId}/status`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: newStatus })
+                });
+
+                if (response.ok) {
+                    alert('Status updated successfully');
+                    fetchOrders(); // Refresh table
+                    viewDetails(currentOrderId); // Refresh details view
+                } else {
+                    alert('Failed to update status');
+                }
+            }
+
+            function closeDetails() {
+                document.getElementById('detailsPanel').style.display = 'none';
+                currentOrderId = null;
+            }
+
+            // Load orders on page startup
+            window.onload = fetchOrders;
+        </script>
+    </body>
+    </html>
+    """
 
 # ============================================================
 # RUN THE APP
