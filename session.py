@@ -1,20 +1,8 @@
-# ============================================================
-# session.py — Session state manager
-# ============================================================
-# Each websocket connection gets a Session instance.
-# This holds:
-#   - cart: { productId → quantity }
-#   - lastShownProducts: list of products shown in last response
-#   - userProfile: { skinType, concerns }
-#   - conversation_history: last 10 messages
-#   - conversation_summary: summarized older messages
-#
-# All in-memory. Lost on disconnect. Perfect for messenger-style chat.
-# ============================================================
-
 import json
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
+
+from sqlalchemy import text
 
 
 @dataclass
@@ -26,31 +14,11 @@ class CartItem:
     price: float  # cached price at time of adding
 
 
-# @dataclass
-# class ShownProduct:
-#     """One product shown to the user in the last response."""
-#     position: int  # 1-indexed position in the list
-#     product_id: int
-#     name: str
-#     price: float
-#     sku: str
-
-
 @dataclass
 class UserProfile:
     """The user's stated skin type and concerns."""
     skin_type: Optional[str] = None  # oily | dry | combination | sensitive | normal
     concerns: List[str] = field(default_factory=list)  # ["acne", "hydration", ...]
-
-
-@dataclass
-class SearchContext:
-    """Stores pagination state for product searches."""
-    filters: Dict[str, Any] = field(default_factory=dict)  # Last search filters
-    total_count: int = 0  # Total matching products
-    shown_product_ids: List[int] = field(default_factory=list)  # All shown IDs
-    page: int = 1  # Current page
-    has_more: bool = False  # More results available?
 
 
 class Session:
@@ -67,10 +35,36 @@ class Session:
         self.conversation_history: List[Dict[str, str]] = []  # Stores last 10 messages
         self.conversation_summary: Optional[str] = None  # Summary of older messages
         self.all_products: str = ""  # Cache products output (loaded once)
+        self.all_brands: str = ""
         self.totalItemCount: int = 0  # Total count of products in database
         self._load_all_products()
+        self._load_all_brand()
         self._load_total_items_count()
-    
+
+    def _load_all_brand(self):
+        """
+        Directly queries the database and returns unique brands as:
+        "Simple, Loreal, Garnier, The Ordinary"
+        """
+        from database import SessionLocal
+        with SessionLocal() as session:
+            # Using raw SQL for clarity and performance
+            query = text("""
+                SELECT DISTINCT brand
+                FROM products
+                WHERE brand IS NOT NULL AND brand != ''
+                ORDER BY brand
+            """)
+
+            result = session.execute(query)
+            brands = [row[0].strip() for row in result if row[0]]
+
+            if not brands:
+                self.all_brands=""
+
+            self.all_brands= ", ".join(brands)
+            print(self.all_brands)
+
     def _load_all_products(self):
         """Load all products by brand once on session initialization."""
         try:
@@ -140,58 +134,6 @@ class Session:
     def get_cart_total(self) -> float:
         """Calculate total price of all items in cart."""
         return sum(item.price * item.quantity for item in self.cart.values())
-
-    # ── LastShownProducts ────────────────────────────────────
-
-    # def update_last_shown(self, products: List[ShownProduct]):
-    #     """Overwrite lastShownProducts. Called after response generation."""
-    #     self.last_shown_products = products
-    #
-    # def clear_last_shown(self):
-    #     """Clear lastShownProducts. Called after order is placed."""
-    #     self.last_shown_products = []
-
-    # def resolve_reference(self, ref: str) -> Optional[int]:
-    #     """
-    #     Resolve a reference like 'that one', 'the first one', 'the second one'
-    #     to a product_id using lastShownProducts.
-    #
-    #     Returns product_id if resolved, None otherwise.
-    #
-    #     Examples:
-    #       - "that one" / "that" → position 1
-    #       - "the first one" / "first" → position 1
-    #       - "the second one" / "second" → position 2
-    #       - "number 3" / "item 3" → position 3
-    #     """
-    #     if not self.last_shown_products:
-    #         return None
-    #
-    #     ref_lower = ref.lower().strip()
-    #
-    #     # Default reference: "that" or "that one" → first item
-    #     if ref_lower in ["that", "that one", "it"]:
-    #         return self.last_shown_products[0].product_id
-    #
-    #     # Ordinal references
-    #     ordinals = {
-    #         "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
-    #         "1st": 1, "2nd": 2, "3rd": 3, "4th": 4, "5th": 5,
-    #     }
-    #     for word, pos in ordinals.items():
-    #         if word in ref_lower:
-    #             if pos <= len(self.last_shown_products):
-    #                 return self.last_shown_products[pos - 1].product_id
-    #
-    #     # Numeric references: "number 2", "item 3"
-    #     import re
-    #     match = re.search(r'\d+', ref_lower)
-    #     if match:
-    #         pos = int(match.group())
-    #         if 1 <= pos <= len(self.last_shown_products):
-    #             return self.last_shown_products[pos - 1].product_id
-    #
-    #     return None
 
     # ── UserProfile ──────────────────────────────────────────
 
@@ -307,7 +249,8 @@ Current cart:
         return SYSTEM_PROMPT_TEMPLATE.format(
             totalItemsCount=self.totalItemCount,
             productData=self.all_products,
-            context=context_str.strip()
+            context=context_str.strip(),
+            allBrand=self.all_brands,
         )
 
     # ── Serialization for system prompt ──────────────────────
