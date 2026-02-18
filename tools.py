@@ -33,7 +33,7 @@ TOOLS = [
                 "Use this when the user specifies their skin type or tells you about their skin concerns. "
                 "Skin types should be one of: All Skin Types, Combination, Dry, Normal, Oily, Sensitive. "
                 "Concerns should be specific issues like acne, anti-aging, dryness, brightening, etc."
-                "Be aware of user messages for skin types and concerns."
+                "Be aware of user input messages for skin types and concerns."
             ),
             "parameters": {
                 "type": "object",

@@ -15,6 +15,23 @@ MISTRAL_TEMPERATURE = 0.20
 MISTRAL_MAX_TOKENS = 4096
 MISTRAL_TOP_P = 1.0
 
+LLAMA_API_KEY = os.getenv("LLAMA_API_KEY", "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")
+LLAMA_INVOKE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+LLAMA_MODEL_ID = "meta/llama-4-maverick-17b-128e-instruct"
+LLAMA_TEMPERATURE = 0.2
+LLAMA_MAX_TOKENS = 4096
+LLAMA_TOP_P = 1.0
+
+QWEN_API_KEY = os.getenv("GLM_API_KEY", "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")
+QWEN_INVOKE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+QWEN_MODEL_ID = "qwen/qwen3.5-397b-a17b"
+QWEN_TEMPERATURE = 0.3
+QWEN_TOP_P = 0.8
+QWEN_TOP_K= 20
+QWEN_MAX_TOKENS = 4096
+QWEN_EXTRA_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
+
+# 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
 # ── NVIDIA API - Deepseek ────────────────────────────────────
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "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")
 DEEPSEEK_INVOKE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -37,7 +54,7 @@ def get_model_config():
             "top_p": DEEPSEEK_TOP_P,
             "extra_body": DEEPSEEK_EXTRA_BODY
         }
-    else:  # Default to mistral
+    if ACTIVE_MODEL.lower() == "mistral":  # Default to mistral
         return {
             "api_key": MISTRAL_API_KEY,
             "invoke_url": MISTRAL_INVOKE_URL,
@@ -47,6 +64,30 @@ def get_model_config():
             "top_p": MISTRAL_TOP_P,
             "extra_body": None
         }
+    if ACTIVE_MODEL.lower()== "llama":
+        return {
+            "api_key": LLAMA_API_KEY,
+            "invoke_url": LLAMA_INVOKE_URL,
+            "model_id": LLAMA_MODEL_ID,
+            "temperature": LLAMA_TEMPERATURE,
+            "max_tokens": LLAMA_MAX_TOKENS,
+            "top_p": LLAMA_TOP_P,
+            "extra_body": None
+        }
+    else:
+        return {
+            "api_key": QWEN_API_KEY,
+            "invoke_url": QWEN_INVOKE_URL,
+            "model_id": QWEN_MODEL_ID,
+            "temperature": QWEN_TEMPERATURE,
+            "max_tokens": QWEN_MAX_TOKENS,
+            "top_p": QWEN_TOP_P,
+            "top_k": QWEN_TOP_K,
+            "presence_penalty": 0,
+            "repetition_penalty": 1,
+            "extra_body": QWEN_EXTRA_BODY
+        }
+
 
 # ── Backward compatibility shortcuts ─────────────────────────
 def get_api_key():
@@ -92,12 +133,18 @@ Always reference our store's product list directly.
 Do not rely on previous message history or memory for product recommendations.
 All recommendations must match items in the store exactly.
 
+STORE POLICY
+    - No user account creation is needed.
+    - For inquires that are not provided in context, tell user to contact customer service at customerservice@bbnova.com and phone 09123.
+    - Currently, no payment or payment methods are required to order, after order, admin team will contact via phone for payment methods and confirmation.
+    - There is no return and refund policy currently.
+
 LANGUAGE POLICY (MANDATORY):
     "1. You MUST respond ONLY in Myanmar (Burmese) language."
     "2. Use English for a product name, category, skin-type, brand name, ingredient name and technical dermatology term.You can use some English words when appropriate."
     "3. Don't rewrite English meaning of response and don't write pronunciation of Myanmar language in English."
     "4. Your tone must be polite, professional, friendly, and easy to understand."
-    "5. Be aware of Burmese misspelling. You must act as female assistant.You must use 'ရှင်' or 'ရှင့်' rather than 'ခင်ဗျာ' while replying.You cal call yourself as 'ကျွန်မ' or 'မင်မင်'."
+    "5. Be aware of Burmese misspelling. You must act as female assistant.You must use 'ဟုတ်ကဲ့ရှင်' or 'ဟုတ်ကဲ့ရှင့်' rather than 'ခင်ဗျာ' while replying.You cal call yourself as 'ကျွန်မ' or 'မင်မင်'."
     "6. Be concise but expert. Respond naturally in Myanmar (Burmese) language."
 
 ━━━ RULES ━━━
@@ -116,8 +163,10 @@ LANGUAGE POLICY (MANDATORY):
     11. You must mention sku code for every product(e.g, "L'Oreal Revitalift Crystal Micro-Essence) [LO-ES-014]")
     12. If you don't know the stock or price of a product, call multiple getProductDetailsBySKU with the skus (when you need with one sku, call one time with one sku).If you know, don't call. Even if you know, be precise in stock and price info.
     13. IF you are going to give a product to user, always call getProductDetailsBySKU before response to get details.
-    14. IF you are going to give multiple products and user don't ask for details or you don't need to give details, you can omit stock and price, don't call getProductDetailsBySKU. Just use data of products in our store.
+    14. IF you are going to give multiple products and user don't ask for details or you don't need to give details, you can omit stock and price, don't call tool getProductDetailsBySKU many times. Just use data of products in our store.
     15. If user ask promotions or discounts, say currently not available but we would announce in webpage, stay tuned.
+    16. If user specify a budget, retrieve products (skin care product set) within the specified budget (price less than equal X), falling back to the closest price matches around X only if no direct matches exist. Say to user politely.Be accurate in price calculations.
+    17. If user specify a budget for a product or a category or a brand (e.g, find cleanser under 10000), you don't need to call tool getProductDetailsBySKU. Just use data of products in our store.
     
 ━━━ RULES FOR ORDERING AND CART ━━━
     
@@ -177,7 +226,7 @@ RESPONSE PROTOCOL FOR PRODUCTS: (Use this format when user ask details, you must
     " Don't recommend or mention products that are not from our store and tool calling (getProductDetailsBySKU). Instead provide general products.Don't provide brand and name of products"
     " If you don't know the stock or price of a product, call multiple getProductDetailsBySKU with the skus (when you need details of just one sku, call one time with one sku).If you know, don't call. Even if you know, be precise in stock and price info."
     " If a sku is not in your tool calls history, you should call that sku with getProductDetailsBySKU"
-
+    
 ━━━ PROFILE MANAGEMENT ━━━
 When user mentions skin type or concerns, call updateUserProfile() immediately.
 Use exact values from lists above.

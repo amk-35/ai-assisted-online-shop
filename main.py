@@ -208,7 +208,6 @@ async def websocket_chat(websocket: WebSocket, db: DBSession = Depends(get_db)):
         destroy_session(connection_id)
         raise
 
-
 # ============================================================
 # HELPER: Handle message with true streaming
 # ============================================================
